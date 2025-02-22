@@ -8,6 +8,10 @@
 #   Modified: 14/02/2025 
 ####################################################################
 
+# Pedir fonts
+# Arreglar grafico de calor
+# colores explorador en mapa
+
 ################# Packages
 import dash
 from dash import dcc, html, dash_table
@@ -27,60 +31,77 @@ from datetime import datetime
 from db_connection import conect_bd
 
 # Select input data
-simulated_data = 1 # if equal to 1 => Create simulated data to test dashboard, 0 => Fetch most recent backend data and upload to dashboard.
-year = 2024
-day_zero_current_year = pd.to_datetime("2024-08-02")  # Adjust the format
-day_zero_previous_year = pd.to_datetime("2023-08-10")  # Adjust the format
+simulated_data = 0 # if equal to 1 => Create simulated data to test dashboard, 0 => Fetch most recent backend data and upload to dashboard.
+year = 2025
+day_zero_current_year = pd.to_datetime("2025-02-02")  # Adjust the format
+day_zero_previous_year = pd.to_datetime("2024-02-02")  # Adjust the format
 
-########### TEMPORARY FIX: Bring created_at data from schoolmint to track application date. Change to instituion_application_ranking$created_at leater (assigned to lady)
+# Bring private crosswalk (list of users in intervetion)
+# registration_crosswalk = pd.read_csv('/Users/ignaciolepe/Documents/GitHub/nhps-schoolmint-pipeline/1_data/intermediates/registration_crosswalk.csv')
 
 ############
 
 if simulated_data == 0:
+    
     ################# Fetch backend data 
 
     # Define environment and database schema
-    environment = 'production'  # Change to 'production' if needed
-    tenant = 'chile'
+    environment = 'staging'  # Change to 'production' if needed
+    tenant = 'newhaven'
     
     # Establish connection
     conn = conect_bd('core', environment) 
 
-    # Fetch applications per day for the current and previous year ###### EVENTUALLY CHANGE create por created_at
+    # Fetch applications per day for the current and previous year
     query = f"""
-        SELECT DATE(created) AS Date, COUNT(id) AS Applications
-        FROM {tenant}.registration_applicant
+        SELECT 
+            application_id,
+            DATE(created) AS Date, 
+            COUNT(DISTINCT application_id) AS Applications
+        FROM {tenant}.institutions_application_ranking
         WHERE EXTRACT(YEAR FROM created) = {year}
-        GROUP BY Date
+        GROUP BY application_id, Date
         ORDER BY Date;
     """
     applications_current_year_df = pd.read_sql_query(query, conn)
 
-
     # Ensure 'Date' and 'Applications' are correctly capitalized
-    applications_current_year_df.rename(columns={'date': 'Date', 'applications': 'Applications'}, inplace=True)
-    applications_current_year_df['Date'] = applications_current_year_df['Date'].astype(str)
+    applications_current_year_df.rename(
+        columns={'date': 'Date', 'applications': 'Applications'}, inplace=True
+    )
+    applications_current_year_df['Date'] = pd.to_datetime(applications_current_year_df['Date'])
 
-    query = f"""
-        SELECT DATE(created) AS Date, COUNT(id) AS Applications
-        FROM {tenant}.registration_applicant
-        WHERE EXTRACT(YEAR FROM created) = {year} - 1
-        GROUP BY Date
-        ORDER BY Date;
-    """
-    applications_previous_year_df = pd.read_sql_query(query, conn)
+    ########## SIMULATION ON PREVIOUS YEAR DATA
 
-    # Ensure 'Date' and 'Applications' are correctly capitalized
-    applications_previous_year_df.rename(columns={'date': 'Date', 'applications': 'Applications'}, inplace=True)
-    applications_previous_year_df['Date'] = applications_previous_year_df['Date'].astype(str)
+    # Simulate the previous year's data by selecting 80% of the applications per day
+    applications_previous_year_list = []
 
-    # Ensure 'Date' is correctly formatted as a datetime object
-    applications_current_year_df["Date"] = pd.to_datetime(applications_current_year_df["Date"])
-    applications_previous_year_df["Date"] = pd.to_datetime(applications_previous_year_df["Date"])
+    for date, group in applications_current_year_df.groupby("Date"):
+        sample_size = int(len(group) * 0.85)  # 80% sample per day
+        sampled_group = group.sample(n=sample_size, random_state=42)  # Ensure reproducibility
+        sampled_group["Date"] = sampled_group["Date"] - pd.DateOffset(years=1)  # Shift back by 1 year
+        applications_previous_year_list.append(sampled_group)
+
+    # Concatenate all sampled groups
+    applications_previous_year_df = pd.concat(applications_previous_year_list, ignore_index=True)
+
+    # Aggregate counts by date
+    applications_previous_year_df = (
+        applications_previous_year_df.groupby("Date")
+        .size()
+        .reset_index(name="Applications (Previous Year)")
+    )
+
+    # Aggregate counts for the current year
+    applications_current_year_df = (
+        applications_current_year_df.groupby("Date")
+        .size()
+        .reset_index(name="Applications")
+    )
 
     # Merge current and previous year data
     applications_df = applications_current_year_df.merge(
-        applications_previous_year_df, on="Date", how="outer", suffixes=("", " (Previous Year)")
+        applications_previous_year_df, on="Date", how="outer"
     ).fillna(0)
 
     # Compute cumulative applications
@@ -92,12 +113,13 @@ if simulated_data == 0:
 
     # Select only weekly (Monday) dates for x-axis ticks
     weekly_dates = applications_df["Date"][applications_df["Date"].dt.weekday == 0]  # ✅ Now this works
-
+    
     # Fetch applications by grade
     query = f"""
-        SELECT l.grade_name AS Grade, COUNT(g.applicant_id) AS Applications
+        SELECT l.grade_name AS Grade, COUNT(DISTINCT g.applicant_id) AS Applications
         FROM {tenant}.registration_applicant_interested_grade g
         JOIN {tenant}.institutions_grade_label l ON g.grade_label_id = l.id
+        WHERE EXTRACT(YEAR FROM created) = {year}
         GROUP BY l.grade_name
         ORDER BY l.grade_name;
     """
@@ -126,30 +148,52 @@ if simulated_data == 0:
     most_demanded_df = school_demand_df.sort_values("% Used", ascending=False).head(10)
     least_demanded_df = school_demand_df.sort_values("% Used", ascending=True).head(10)
 
-    # Fetch demand heatmap data for applicants
-    query = f"""
-        SELECT a.id, ad.address_lat AS lat, ad.address_lon AS lon
+    # Fetch applicant demand heatmap data
+    query_applicant_demand = f"""
+        SELECT 
+            ad.address_lat AS lat, 
+            ad.address_lon AS lon, 
+            COUNT(DISTINCT a.id) AS Demand
         FROM {tenant}.registration_applicant a
-        JOIN {tenant}.registration_applicant_address ad ON a.id = ad.applicant_id
-        WHERE a.id IN (SELECT applicant_id FROM {tenant}.institutions_application WHERE year = {year});
+        JOIN {tenant}.registration_applicant_address ad 
+            ON a.id = ad.applicant_id
+        WHERE a.id IN (SELECT applicant_id FROM {tenant}.institutions_application WHERE year = {year})
+        GROUP BY ad.address_lat, ad.address_lon
+        ORDER BY Demand DESC;
     """
-    heatmap_df = pd.read_sql_query(query, conn)
 
-    # Fetch demand heatmap data for schools
-    query = f"""
-        SELECT DISTINCT 
-            loc.institution_code AS School, 
+    heatmap_df = pd.read_sql_query(query_applicant_demand, conn)
+    # Fetch school demand heatmap data
+    query_school_demand = f"""
+        SELECT 
             loc.latitud AS lat, 
-            loc.longitud AS lon
-        FROM {tenant}.institutions_location loc
-        WHERE loc.latitud IS NOT NULL AND loc.longitud IS NOT NULL; 
+            loc.longitud AS lon, 
+            COUNT(DISTINCT ia.applicant_id) AS Demand
+        FROM {tenant}.institutions_application ia
+        JOIN {tenant}.institutions_location loc 
+            ON loc.institution_code::BIGINT = loc.institution_code::BIGINT  
+        WHERE loc.latitud IS NOT NULL 
+        AND loc.longitud IS NOT NULL 
+        AND ia.year = {year}
+        GROUP BY loc.latitud, loc.longitud
+        ORDER BY Demand DESC;
     """
-    school_heatmap_df = pd.read_sql_query(query, conn)
+
+    school_heatmap_df = pd.read_sql_query(query_school_demand, conn)
 
     # Convert lat and lon to numeric if necessary 
+    heatmap_df["lat"] = pd.to_numeric(heatmap_df["lat"], errors="coerce")
+    heatmap_df["lon"] = pd.to_numeric(heatmap_df["lon"], errors="coerce")
     school_heatmap_df["lat"] = pd.to_numeric(school_heatmap_df["lat"], errors="coerce")
     school_heatmap_df["lon"] = pd.to_numeric(school_heatmap_df["lon"], errors="coerce")
 
+    # Remove rows where lat or lon are NaN
+    school_heatmap_df = school_heatmap_df.dropna(subset=['lat', 'lon'])
+    heatmap_df = heatmap_df.dropna(subset=['lat', 'lon'])
+
+    # Explicitly rename the demand column to ensure consistency
+    heatmap_df.rename(columns={"demand": "Demand"}, inplace=True)
+    school_heatmap_df.rename(columns={"demand": "Demand"}, inplace=True)
 
     # Ensure 'Date' is correctly formatted as a datetime object
     applications_current_year_df["Date"] = pd.to_datetime(applications_current_year_df["Date"])
@@ -168,7 +212,7 @@ if simulated_data == 0:
         applications_previous_year_df, on="Day", how="outer", suffixes=("", " (Previous Year)")
     ).fillna(0)
 
-    ############### SIMULATION SECTION. PLEASE UPDATE LATER WHEN API IS DONE
+    ############### SIMULATION SECTION. PLEASE UPDATE LATER WHEN SIMULAION API IS DONE
 
     # Simulate data for the simulation section
     num_applicants = 1000
@@ -192,7 +236,6 @@ if simulated_data == 0:
     # Generate simulated data
     num_applicants = 1000
     non_assigned_prob = np.random.rand(num_applicants)  # Probabilities of non-assignment
-
 
     # Close the connection
     conn.close()
