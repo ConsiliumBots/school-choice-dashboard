@@ -22,26 +22,29 @@ import plotly.graph_objects as go
 from dash.dependencies import Input, Output
 from datetime import datetime, timedelta
 import seaborn as sns
+import plotly.express as px
 import matplotlib.pyplot as plt
 from scipy.stats import gaussian_kde
 from io import BytesIO
 import base64
 from datetime import datetime
+import os
+import glob
 
 from db_connection import conect_bd
 
 # Select input data
-simulated_data = 0 # if equal to 1 => Create simulated data to test dashboard, 0 => Fetch most recent backend data and upload to dashboard.
+data_source = "schoolmint" # select source of data between: "backend", "schoolmint", "simulated"
 year = 2025
-day_zero_current_year = pd.to_datetime("2025-02-02")  # Adjust the format
-day_zero_previous_year = pd.to_datetime("2024-02-02")  # Adjust the format
+day_zero_current_year = pd.to_datetime("2025-02-03")  # Adjust the format
+day_zero_previous_year = pd.to_datetime("2024-01-30")  # Adjust the format
 
-# Bring private crosswalk (list of users in intervetion)
-# registration_crosswalk = pd.read_csv('/Users/ignaciolepe/Documents/GitHub/nhps-schoolmint-pipeline/1_data/intermediates/registration_crosswalk.csv')
+last_day_current_year = pd.to_datetime("2025-03-07")
+last_day_previous_year = pd.to_datetime("2025-03-02")
 
 ############
 
-if simulated_data == 0:
+if data_source == "backend":
     
     ################# Fetch backend data 
 
@@ -116,12 +119,12 @@ if simulated_data == 0:
     
     # Fetch applications by grade
     query = f"""
-        SELECT l.grade_name AS Grade, COUNT(DISTINCT g.applicant_id) AS Applications
+        SELECT l.grade_name_en AS Grade, COUNT(DISTINCT g.applicant_id) AS Applications
         FROM {tenant}.registration_applicant_interested_grade g
         JOIN {tenant}.institutions_grade_label l ON g.grade_label_id = l.id
         WHERE EXTRACT(YEAR FROM created) = {year}
-        GROUP BY l.grade_name
-        ORDER BY l.grade_name;
+        GROUP BY l.grade_name_en
+        ORDER BY l.grade_name_en;
     """
     applications_grade_df = pd.read_sql_query(query, conn)
 
@@ -239,8 +242,275 @@ if simulated_data == 0:
 
     # Close the connection
     conn.close()
+    
+    # Ensure the column names match what px.pie expects
+    applications_grade_df.rename(columns={'grade': 'Grade', 'applications': 'Applications'}, inplace=True)
 
-elif simulated_data == 1:
+    # Define the strict order for grades
+    grade_order = ["PreK-3", "PreK-4", "Kindergarten", "1st Grade", "2nd Grade", "3rd Grade", "4th Grade",
+                "5th Grade", "6th Grade", "7th Grade", "8th Grade", "9th Grade", "10th Grade", "11th Grade", "12th Grade"]    
+
+elif data_source == "schoolmint":
+    # ✅ Define base path for SchoolMint input data
+    base_path = "/Users/ignaciolepe/Documents/GitHub/nhps-schoolmint-pipeline/1_data/inputs"
+
+    def load_csvs(year):
+        """Load all CSVs for a given year into a dictionary of DataFrames."""
+        folder_path = os.path.join(base_path, str(year))
+        csv_files = glob.glob(os.path.join(folder_path, "*.csv"))
+        dataframes = {}
+
+        for file in csv_files:
+            file_name = os.path.basename(file).replace(".csv", "")
+            df = pd.read_csv(file)
+            dataframes[file_name] = df
+            print(f"Loaded: {file_name} | Variables: {list(df.columns)}")
+        
+        return dataframes
+
+    # ✅ Load CSV files for both years
+    data_2024 = load_csvs(2024)
+    data_2025 = load_csvs(2025)
+
+    # ✅ Load datasets
+    applications1_2024 = data_2024['applications1']
+    applications2_2024 = data_2024['applications2']
+    applications1_2025 = data_2025['applications1']
+    applications2_2025 = data_2025['applications2']
+    schools_df = data_2025['schools']
+    students_df = data_2025['students']
+    students_annual_df = data_2025['students_annual']
+    programs_df = data_2025['programs']
+    siblings_df = data_2025['siblings']
+    guardian_account_df = data_2025['guardian_account']
+
+    # ✅ Rename 'id' to 'student_id' in students_df to match students_annual_df
+    students_df.rename(columns={'id': 'student_id'}, inplace=True)
+
+    # ✅ Convert 'student_id' and 'id' to integer before merging
+    for df in [applications2_2025, applications2_2024]:
+        df['id'] = df['id'].astype('Int64')  # Preserve NaNs
+        df['student_id'] = df['student_id'].astype('Int64')
+
+    # ✅ Merge applications1 with applications2 to retrieve `student_id`
+    def merge_applications(app1, app2):
+        return (
+            app1.merge(app2[['id', 'student_id', 'created_at', 'program_id']], left_on='App#', right_on='id', how='left')
+            .drop(columns=['id'])  # Drop duplicate ID column
+        )
+
+    applications_current_year_df = merge_applications(applications1_2025, applications2_2025)
+    applications_previous_year_df = merge_applications(applications1_2024, applications2_2024)
+
+    # ✅ Ensure 'Date' is correctly formatted as a datetime object
+    applications_current_year_df["Date"] = pd.to_datetime(applications_current_year_df["created_at"]).dt.date
+    applications_previous_year_df["Date"] = pd.to_datetime(applications_previous_year_df["created_at"]).dt.date
+
+    # ✅ Convert 'Date' column to datetime, ensuring proper format and handling NaNs
+    applications_current_year_df["Date"] = pd.to_datetime(applications_current_year_df["Date"], errors='coerce')
+    applications_previous_year_df["Date"] = pd.to_datetime(applications_previous_year_df["Date"], errors='coerce')
+
+    # ✅ Drop NaN values in 'Date' before computing the minimum
+    applications_current_year_df = applications_current_year_df.dropna(subset=["Date"])
+    applications_previous_year_df = applications_previous_year_df.dropna(subset=["Date"])
+
+    # ✅ Drop duplicates at the student-date level
+    applications_current_year_df = applications_current_year_df.drop_duplicates(subset=["Date", "student_id"])
+    applications_previous_year_df = applications_previous_year_df.drop_duplicates(subset=["Date", "student_id"])
+
+    # ✅ Aggregate daily applications by unique students
+    applications_daily_counts_df = (
+        applications_current_year_df.groupby("Date")["student_id"]
+        .nunique()
+        .reset_index(name="Applications")
+    )
+
+    applications_previous_year_counts_df = (
+        applications_previous_year_df.groupby("Date")["student_id"]
+        .nunique()
+        .reset_index(name="Applications (Previous Year)")
+    )
+
+    # ✅ Compute cumulative applications
+    applications_daily_counts_df["Cumulative Applications (Current Year)"] = applications_daily_counts_df["Applications"].cumsum()
+    applications_previous_year_counts_df["Cumulative Applications (Previous Year)"] = applications_previous_year_counts_df["Applications (Previous Year)"].cumsum()
+
+    # ✅ Compute "Day" since "Day 0"
+    applications_daily_counts_df["Date"] = pd.to_datetime(applications_daily_counts_df["Date"])
+    applications_previous_year_counts_df["Date"] = pd.to_datetime(applications_previous_year_counts_df["Date"])
+
+    day_zero_current_year = pd.Timestamp(day_zero_current_year)
+    day_zero_previous_year = pd.Timestamp(day_zero_previous_year)
+
+    applications_daily_counts_df["Day"] = (applications_daily_counts_df["Date"] - day_zero_current_year).dt.days
+    applications_previous_year_counts_df["Day"] = (applications_previous_year_counts_df["Date"] - day_zero_previous_year).dt.days
+
+    # ✅ Filter applications up to the given deadlines
+    applications_daily_counts_df = applications_daily_counts_df[applications_daily_counts_df["Date"] <= last_day_current_year]
+    applications_previous_year_counts_df = applications_previous_year_counts_df[applications_previous_year_counts_df["Date"] <= last_day_previous_year]
+
+    # **Filter out values before Day 0**
+    applications_daily_counts_df = applications_daily_counts_df[applications_daily_counts_df["Day"] >= 0]
+    applications_previous_year_counts_df = applications_previous_year_counts_df[applications_previous_year_counts_df["Day"] >= 0]
+
+    # ✅ Get today's date
+    today_date = pd.Timestamp(datetime.today().date())
+
+    # ✅ Find the relative "Day" in 2025
+    latest_day_2025 = (today_date - day_zero_current_year).days
+
+    # ✅ Find the equivalent "Day" in 2024 based on the relative position
+    equivalent_day_2024 = (day_zero_previous_year + pd.Timedelta(days=latest_day_2025)).date()
+
+    # ✅ Trim 2025 applications **up to today**
+    applications_per_day_filtered_df = applications_daily_counts_df[
+        applications_daily_counts_df["Day"] <= latest_day_2025
+    ]
+
+    # ✅ Trim 2024 applications **up to the equivalent day in 2024**
+    applications_previous_year_filtered_df = applications_previous_year_counts_df[
+        applications_previous_year_counts_df["Date"] <= pd.Timestamp(equivalent_day_2024)
+    ]
+
+    # ✅ Merge **filtered 2024** (up to equivalent day) with **filtered 2025** (up to today)
+    applications_df_filtered = applications_previous_year_filtered_df.merge(
+        applications_per_day_filtered_df, on="Day", how="left", suffixes=(" (Previous Year)", "")
+    ).fillna(0)
+
+    # ✅ Merge **full 2024** with **full 2025** (unfiltered version for cumulative applications)
+    applications_df = applications_previous_year_counts_df.merge(
+        applications_daily_counts_df, on="Day", how="left", suffixes=(" (Previous Year)", "")
+    ).fillna(0)
+
+    # ✅ Use `applications_df_filtered` only for the "Applicants per Day" graph
+    applications_per_day_df = applications_df_filtered.copy()
+
+    # ✅ Count unique student applications per grade
+    applications_grade_df = (
+        applications_current_year_df.groupby("Grade")["student_id"]
+        .nunique()
+        .reset_index(name="Applications")
+    )
+
+    # ✅ Ensure both columns have the same type (string) before merging
+    applications_current_year_df["Program"] = applications_current_year_df["Program"].astype(str)
+    schools_df["id"] = schools_df["id"].astype(str)
+
+    # ✅ Merge applications with students_annual_df and schools_df
+    school_demand_df = (
+        applications_current_year_df
+        .merge(students_annual_df[['student_id', 'grade']], on='student_id', how='left')
+        .merge(schools_df[['id', 'school_name']], left_on='Program', right_on='id', how='left')
+        .groupby(['school_name', 'grade'])
+        .size()
+        .reset_index(name="Total Applications")
+    )
+
+    # Convert float columns to integers where possible
+    columns_to_fix = [
+        "Applications", 
+        "Cumulative Applications (Current Year)"
+    ]
+
+    for col in columns_to_fix:
+        applications_per_day_df[col] = applications_per_day_df[col].fillna(0).astype(int)
+
+    # ✅ Handle missing school names
+    school_demand_df = school_demand_df.dropna(subset=['school_name'])
+
+    # ✅ Simulate "Used Vacants" (Replace with actual data if available)
+    school_demand_df["Total Vacants"] = np.random.randint(20, 100, size=len(school_demand_df))
+    school_demand_df["Used Vacants"] = np.minimum(school_demand_df["Total Applications"], school_demand_df["Total Vacants"])
+    school_demand_df["% Used"] = (school_demand_df["Used Vacants"] / school_demand_df["Total Vacants"]) * 100
+
+    # ✅ Create demand heatmap data
+    heatmap_df = (
+        students_df[['student_id', 'birth_city']]
+        .merge(students_annual_df[['student_id', 'address_lat', 'address_lng']], on='student_id', how='left')
+        .groupby(['address_lat', 'address_lng']).size().reset_index(name="Demand")
+    )
+
+    # ✅ Ensure both columns are the same type before merging
+    schools_df["id"] = schools_df["id"].astype(str)
+    applications_current_year_df["student_id"] = applications_current_year_df["student_id"].astype(str)
+
+    # ✅ Rename `address_lat` and `address_lng` in applicant_heatmap_df
+    schools_df.rename(columns={'lng': 'lon'}, inplace=True)
+
+    # ✅ Ensure ID types match before merging
+    applications_current_year_df["program_id"] = applications_current_year_df["program_id"].astype(str).str.replace(r"\.0$", "", regex=True)
+    programs_df["id"] = programs_df["id"].astype(str)
+    programs_df["school_id"] = programs_df["school_id"].astype(str)
+    schools_df["id"] = schools_df["id"].astype(str)
+    
+    # ✅ Merge applications → programs → schools
+    school_heatmap_df = (
+        applications_current_year_df
+        .merge(programs_df[['id', 'school_id']], left_on='program_id', right_on='id', how='left')
+        .drop(columns=['id'])  # Drop duplicate 'id' from programs_df
+        .merge(schools_df[['id', 'lat', 'lon', 'school_name']], left_on='school_id', right_on='id', how='left')
+        .drop(columns=['id'])  # Drop duplicate 'id' from schools_df
+        .groupby(['lat', 'lon', 'school_name'])['student_id']
+        .nunique()
+        .reset_index(name="Total Applicants")  # Count unique applicants per school
+    )
+
+    #Rename Total Applicants to Demand
+    school_heatmap_df.rename(columns={'Total Applicants': 'Demand'}, inplace=True)
+
+    # ✅ Rename `address_lat` and `address_lng` in applicant_heatmap_df
+    heatmap_df.rename(columns={'address_lat': 'lat', 'address_lng': 'lon'}, inplace=True)
+
+    # ✅ Convert lat/lon to numeric & drop NaN
+    for df in [heatmap_df, school_heatmap_df]:
+        df["lat"] = pd.to_numeric(df["lat"], errors="coerce")
+        df["lon"] = pd.to_numeric(df["lon"], errors="coerce")
+        df.dropna(subset=['lat', 'lon'], inplace=True)
+
+    # ✅ Standardize Grade Names
+    grade_mapping = {
+        "PreK3": "PreK-3", "PreK4": "PreK-4", "K": "Kindergarten",
+        "1": "1st Grade", "2": "2nd Grade", "3": "3rd Grade", "4": "4th Grade",
+        "5": "5th Grade", "6": "6th Grade", "7": "7th Grade", "8": "8th Grade",
+        "9": "9th Grade", "10": "10th Grade", "11": "11th Grade", "12": "12th Grade"
+    }
+
+    applications_grade_df["Grade"] = applications_grade_df["Grade"].map(grade_mapping)
+
+    grade_order = ["PreK-3", "PreK-4", "Kindergarten", "1st Grade", "2nd Grade", "3rd Grade", "4th Grade",
+                "5th Grade", "6th Grade", "7th Grade", "8th Grade", "9th Grade", "10th Grade", "11th Grade", "12th Grade"]
+    
+
+    ############### SIMULATION SECTION. PLEASE UPDATE LATER WHEN SIMULAION API IS DONE
+
+    # Simulate data for the simulation section
+    num_applicants = 1000
+    assigned_fraction = np.random.uniform(0.6, 0.9, num_applicants)
+    assignment_counts = np.random.dirichlet([4, 3, 2, 1, 1, 2, 2], size=1)[0] * num_applicants
+    assignment_labels = [
+        "1st Preference", "2nd Preference", "3rd Preference",
+        "4th Preference", "+5th Preference", "Non-Assigned"
+    ]
+
+    # Ensure assignment_counts has the same length as assignment_labels
+    num_preferences = len(assignment_labels)  # Ensure matching lengths
+    assignment_counts = np.random.dirichlet([4, 3, 2, 1, 1, 2], size=1)[0] * num_applicants
+
+    # Ensure the generated counts have the correct length
+    if len(assignment_counts) != num_preferences:
+        assignment_counts = np.append(assignment_counts, num_applicants - sum(assignment_counts))  # Adjust to match total
+
+    assignment_df = pd.DataFrame({"Assignment": assignment_labels, "Fraction": (assignment_counts / 10).round(1)})
+
+    # Generate simulated data
+    num_applicants = 1000
+    non_assigned_prob = np.random.rand(num_applicants)  # Probabilities of non-assignment  
+
+    most_demanded_df = school_demand_df.sort_values("Total Applications", ascending=False).head(10)
+    least_demanded_df = school_demand_df.sort_values("Total Applications", ascending=True).head(10)
+
+
+elif data_source == "simulated":
     ################# Generate simulated data
     np.random.seed(42)
     dates = [datetime(2025, 1, 1) + timedelta(days=i) for i in range(60)]  # 60 days of application period
@@ -348,17 +618,65 @@ elif simulated_data == 1:
 
 ################# Auxiliary graphs
 
-# Ensure the column names match what px.pie expects
-applications_grade_df.rename(columns={'grade': 'Grade', 'applications': 'Applications'}, inplace=True)
+# Ensure the DataFrame follows the strict order
+applications_grade_df["Grade"] = pd.Categorical(applications_grade_df["Grade"], categories=grade_order, ordered=True)
+applications_grade_df = applications_grade_df.sort_values("Grade", ascending=True)  # Enforce the specified order
 
-# Create a donut chart for applications by grade
-fig_donut = px.pie(
+# Calculate relative percentage
+applications_grade_df["Percentage"] = (applications_grade_df["Applications"] / applications_grade_df["Applications"].sum()) * 100
+
+# Define a custom color scale based on the given color palette
+color_palette = ["#0C1461", "#313F89", "#5627FF", "#5DDBDB", "#5AE0D3"]  # Darker to lighter
+num_colors = len(color_palette)
+
+# Normalize application counts to distribute colors
+applications_grade_df["Color Index"] = applications_grade_df["Applications"].rank(pct=True)  # Scale between 0-1
+applications_grade_df["Color Index"] = (applications_grade_df["Color Index"] * (num_colors - 1)).astype(int)  # Convert to index
+applications_grade_df["Color"] = applications_grade_df["Color Index"].apply(lambda x: color_palette[x])  # Assign colors
+
+# Create a horizontal bar chart with correct order
+fig_bar = px.bar(
     applications_grade_df, 
-    values="Applications", 
-    names="Grade", 
-    title="Applications by Grade",
-    hole=0.4,  # Makes it a donut chart
-    color_discrete_sequence=["#5AE0D3", "#5DDBDB", "#5627FF", "#713BF4", "#22114F"]  # Tether palette
+    x="Applications", 
+    y="Grade", 
+    orientation="h",  # Horizontal bars
+    text="Applications",  # Show applicant count inside bars
+    title="Applicants by Interested Grade",
+    color=applications_grade_df["Color"],  # Use dynamically assigned colors
+    color_discrete_map="identity",  # Uses the manually mapped colors instead of a default scale
+    category_orders={"Grade": grade_order}  # ✅ Forces the correct order!
+)
+
+# Update layout and fonts
+fig_bar.update_layout(
+    title=dict(text="Applicants by Grade", font=dict(family="Inter, sans-serif", size=18)),
+    xaxis=dict(
+        title=dict(text="Number of Applicants", font=dict(family="Inter, sans-serif", size=14))
+    ),
+    yaxis=dict(
+        title=dict(text="Grade", font=dict(family="Inter, sans-serif", size=14)),
+        tickfont=dict(family="Inter, sans-serif", size=12)
+    ),
+    template="plotly_white",
+    font=dict(family="Inter, sans-serif")
+)
+
+# Update text labels to be inside the bars
+fig_bar.update_traces(textposition="inside")
+
+# Add relative percentage labels at the top of each bar
+for i, row in applications_grade_df.iterrows():
+    fig_bar.add_annotation(
+        x=row["Applications"] + max(applications_grade_df["Applications"]) * 0.05,  # Offset text slightly to the right
+        y=row["Grade"],
+        text=f"{row['Percentage']:.1f}%",  # Show percentage above bar
+        showarrow=False,
+        font=dict(family="Inter, sans-serif", size=12, color="black")
+    )
+
+fig_bar.update_traces(
+    textposition="inside",
+    textangle=0  # ✅ Ensures all text inside bars is horizontal
 )
 
 # Kernel Density Estimation (KDE) for smooth density curve
@@ -397,16 +715,36 @@ fig1.update_layout(
     hovermode="x"  # Enables hover interaction along the x-axis
 )
 
-# Calculate differences and determine arrow direction for simulated data
+# Update layout for interactivity with Inter font
+fig1.update_layout(
+    title={
+        "text": "Probability Distribution of Non-Assignment",
+        "font": {"family": "Inter, sans-serif", "size": 18}  # ✅ Title in Inter
+    },
+    xaxis_title="Probability",
+    yaxis_title="Cumulative Fraction",
+    xaxis={
+        "titlefont": {"family": "Inter, sans-serif", "size": 14},  # ✅ X-axis title in Inter
+        "tickfont": {"family": "Inter, sans-serif", "size": 12}  # ✅ X-axis tick labels in Inter
+    },
+    yaxis={
+        "titlefont": {"family": "Inter, sans-serif", "size": 14},  # ✅ Y-axis title in Inter
+        "tickfont": {"family": "Inter, sans-serif", "size": 12}  # ✅ Y-axis tick labels in Inter
+    },
+    template="plotly_white",
+    hovermode="x",  # Enables hover interaction along the x-axis
+    font={"family": "Inter, sans-serif"}  # ✅ Ensures all text elements (legend, annotations) use Inter
+)
+
 # Calculate differences and determine arrow direction for simulated data
 arrow_annotations = []
 num_positive_arrows = 0  # Counter for positive arrows
 num_negative_arrows = 0  # Counter for negative arrows
 
-for i in range(len(applications_df)):
-    day = applications_df["Day"].iloc[i]  # ✅ Use 'Day' instead of 'Date'
-    current = applications_df["Applications"].iloc[i]
-    previous = applications_df["Applications (Previous Year)"].iloc[i]
+for i in range(len(applications_per_day_df)):
+    day = applications_per_day_df["Day"].iloc[i]  # ✅ Use 'Day' instead of 'Date'
+    current = applications_per_day_df["Applications"].iloc[i]
+    previous = applications_per_day_df["Applications (Previous Year)"].iloc[i]
     difference = current - previous
 
     # Determine arrow properties
@@ -450,32 +788,38 @@ weekly_days = applications_df["Day"][applications_df["Day"] % 7 == 0]  # Every 7
 fig = go.Figure()
 
 fig.add_trace(go.Bar(
-    x=applications_df["Day"],
-    y=applications_df["Applications"],
-    name="Applications (Current Year)",
+    x=applications_per_day_df["Day"],
+    y=applications_per_day_df["Applications"],
+    name="Applicants (Current Year)",
     marker=dict(color="rgba(93, 219, 219, 0.7)"),
     hoverinfo="x+y"
 ))
 
 fig.add_trace(go.Bar(
-    x=applications_df["Day"],
-    y=applications_df["Applications (Previous Year)"],
-    name="Applications (Previous Year)",
+    x=applications_per_day_df["Day"],
+    y=applications_per_day_df["Applications (Previous Year)"],
+    name="Applicants (Previous Year)",
     marker=dict(color="rgba(34, 17, 79, 0.7)"),
     hoverinfo="x+y"
 ))
 
 fig.update_layout(
-    title="Applications per Day (Current vs Previous Year)",
+    title={
+        "text": "Applicants per Day (Current vs Previous Year)",
+        "font": {"family": "Inter, sans-serif", "size": 18}  # ✅ Apply Inter to title
+    },
     template="plotly_white",
     barmode="overlay",
-    xaxis_title="Day (relative to Day 0)",
-    yaxis_title="Number of Applications",
     xaxis=dict(
+        title={"text": "Day (relative to Day 0)", "font": {"family": "Inter, sans-serif", "size": 14}},
         tickmode="array",
         tickvals=weekly_days,  # Show only weekly ticks
-        range=[0, applications_df["Day"].max()]  # ✅ Ensures all annotations are visible
+        range=[0, applications_per_day_df["Day"].max()]  # ✅ Ensures all annotations are visible
     ),
+    yaxis=dict(
+        title={"text": "Number of Applicants", "font": {"family": "Inter, sans-serif", "size": 14}}
+    ),
+    font={"family": "Inter, sans-serif"},  # ✅ Apply Inter globally to the entire figure
     hovermode="x",
     annotations=arrow_annotations  # ✅ Ensure annotations are added
 )
@@ -485,7 +829,7 @@ fig_cumulative = go.Figure()
 fig_cumulative.add_trace(go.Scatter(
     x=applications_df["Day"],
     y=applications_df["Cumulative Applications (Current Year)"],
-    name="Cumulative Applications (Current Year)",
+    name="Cumulative Applicants (Current Year)",
     mode="lines+markers",
     marker=dict(size=6, color="#5DDBDB"),
     line=dict(color="#5DDBDB", width=2),
@@ -495,7 +839,7 @@ fig_cumulative.add_trace(go.Scatter(
 fig_cumulative.add_trace(go.Scatter(
     x=applications_df["Day"],
     y=applications_df["Cumulative Applications (Previous Year)"],
-    name="Cumulative Applications (Previous Year)",
+    name="Cumulative Applicants (Previous Year)",
     mode="lines+markers",
     marker=dict(size=6, color="#22114F"),
     line=dict(color="#22114F", width=2),
@@ -503,14 +847,20 @@ fig_cumulative.add_trace(go.Scatter(
 ))
 
 fig_cumulative.update_layout(
-    title="Cumulative Applications (Current vs Previous Year)",
+    title={
+        "text": "Cumulative Applicants (Current vs Previous Year)",
+        "font": {"family": "Inter, sans-serif", "size": 18}  # ✅ Apply Inter to title
+    },
     template="plotly_white",
-    xaxis_title="Day (relative to Day 0)",
-    yaxis_title="Cumulative Applications",
     xaxis=dict(
+        title={"text": "Day (relative to Day 0)", "font": {"family": "Inter, sans-serif", "size": 14}},
         tickmode="array",
         tickvals=weekly_days,  # Show only weekly ticks
     ),
+    yaxis=dict(
+        title={"text": "Cumulative Applicants", "font": {"family": "Inter, sans-serif", "size": 14}}
+    ),
+    font={"family": "Inter, sans-serif"},  # ✅ Apply Inter globally to the entire figure
     hovermode="x"
 )
 
@@ -522,6 +872,12 @@ tether_colors = ["#5AE0D3", "#5DDBDB", "#5627FF", "#713BF4", "#22114F"]  # Tethe
 total_applicants = applications_df["Cumulative Applications (Current Year)"].iloc[-1]
 total_applicants_last_year = applications_df["Cumulative Applications (Previous Year)"].iloc[-1]
 
+# Convert to integer if it's a whole number, otherwise keep as float
+if total_applicants % 1 == 0:
+    total_applicants = int(total_applicants)
+else:
+    total_applicants = float(total_applicants)
+
 # Calculate progress as a percentage
 progress_percentage = (total_applicants / total_applicants_last_year) * 100 if total_applicants_last_year > 0 else 0
 
@@ -529,7 +885,7 @@ progress_percentage = (total_applicants / total_applicants_last_year) * 100 if t
 progress_date = datetime.today().strftime("%B %d, %Y")  # Example: "February 12, 2025"
 
 ################# Create Dash
-app = dash.Dash(__name__)
+app = dash.Dash(__name__, external_stylesheets=['/assets/styles.css'])
 app.title = "New Haven Public Schools Dashboard - 2025"
 
 # Layout
@@ -541,7 +897,7 @@ app.layout = html.Div([
 
         # Title
         html.H1("School Choice Dashboard", 
-                style={'textAlign': 'center', 'color': '#FFFFFF', 'backgroundColor': '#22114F', 
+                style={'textAlign': 'center', 'color': '#FFFFFF', 'backgroundColor': '#0C1461', 
                        'padding': '20px', 'borderRadius': '10px', 'flexGrow': '1', 'margin': '0'}),
 
         # Right-side Logo (TETHER)
@@ -552,7 +908,7 @@ app.layout = html.Div([
 
     # Subtitle for the admission period
     html.H3("2025 Admission Period",  
-            style={'textAlign': 'center', 'color': '#FFFFFF', 'backgroundColor': '#713BF4',  
+            style={'textAlign': 'center', 'color': '#FFFFFF', 'backgroundColor': '#0B114D',  
                    'padding': '10px', 'borderRadius': '10px', 'width': '100%', 'fontWeight': 'normal'}),               
     
 html.Div([
@@ -573,54 +929,65 @@ html.Div([
             html.H3(f"Progress as of {progress_date}", style={'color': '#22114F', 'textAlign': 'center'}),
             html.P(f"{progress_percentage:.1f}%", 
                    style={'fontSize': '24px', 'textAlign': 'center', 'fontWeight': 'bold', 
-                          'color': '#E67E22' if progress_percentage < 100 else '#27AE60'})
+                          'color': '#D7005A' if progress_percentage < 100 else '#28B911'})
         ], style={'flex': '1', 'padding': '10px'}),
 
         # New fourth statistic for positive vs negative arrow annotations
         html.Div([
             html.H3("Application Trends", style={'color': '#22114F', 'textAlign': 'center'}),
             html.P([
-                html.Span(f"▲ {num_positive_arrows}  ", style={'color': '#27AE60', 'fontWeight': 'bold'}),  # Green for positive arrows
-                html.Span(f"▼ {num_negative_arrows}", style={'color': '#E74C3C', 'fontWeight': 'bold'})  # Red for negative arrows
+                html.Span(f"▲ {num_positive_arrows}  ", style={'color': '#28B911', 'fontWeight': 'bold'}),  # Green for positive arrows
+                html.Span(f"▼ {num_negative_arrows}", style={'color': '#D7005A', 'fontWeight': 'bold'})  # Red for negative arrows
             ], style={'fontSize': '24px', 'textAlign': 'center'})
         ], style={'flex': '1', 'padding': '10px'}),
 
     ], style={'display': 'flex', 'justifyContent': 'space-around', 'backgroundColor': 'white', 
               'borderRadius': '10px', 'padding': '20px', 'boxShadow': '2px 2px 12px rgba(0,0,0,0.1)'})
-], style={'padding': '20px', 'backgroundColor': '#F4F6F6', 'borderRadius': '10px', 
+], style={'padding': '20px', 'backgroundColor': '#F4F7FF', 'borderRadius': '10px', 
           'boxShadow': '2px 2px 12px rgba(0,0,0,0.1)'}),
     
 
-    html.Div([
-        html.H2("Applications", style={'color': '#2C3E50', 'textAlign': 'center', 'margin-bottom': '20px'}),
-        dcc.Graph(figure=fig),
-        dcc.Graph(figure=fig_cumulative), 
-        dcc.Graph(figure=fig_donut, style={'flex': '1'})  # Donut chart for grade distribution
-        ], style={'padding': '20px', 'backgroundColor': '#ECF0F1', 'borderRadius': '10px', 'margin-bottom': '20px'}),
-    
-    # Layout update with dropdown for heatmap selection
-    html.Div([
-        html.H2("Map", style={'color': '#2C3E50', 'textAlign': 'center', 'margin-bottom': '20px'}),
+html.Div([
+    html.H2("Applications", style={'color': '#2C3E50', 'textAlign': 'center', 'margin-bottom': '20px'}),
 
+    # 🔹 White Background Applied Here
+    html.Div([
+        # Row for main application charts
         html.Div([
-            dcc.Graph(id="dynamic-heatmap", style={'flex': '1'}),  # 📌 Map goes first
+            dcc.Graph(figure=fig, style={'width': '50%'}),  # Applications per Day
+            dcc.Graph(figure=fig_cumulative, style={'width': '50%'}),  # Cumulative Applications
+        ], style={'display': 'flex', 'gap': '20px'}),
 
-            dcc.Dropdown(
-                id="heatmap-selector",
-                options=[
-                    {"label": "Applicants", "value": "Applicants"},
-                    {"label": "Schools", "value": "Schools"}
-                ],
-                value="Applicants",  # Default selection
-                clearable=False,
-                style={'width': '50%', 'margin': 'auto'}
-            )  # 📌 Dropdown is placed BELOW the map
-        ], style={'display': 'flex', 'flexDirection': 'column', 'gap': '10px'})  # Ensures vertical layout
+        # Row for Applications by Grade (Donut Chart) + Heatmap with Dropdown
+        html.Div([
+            # Donut Chart on the Left
+            html.Div([
+                dcc.Graph(figure=fig_bar)
+            ], style={'width': '50%'}),  # Donut Chart Container
 
-    ], style={'padding': '20px', 'backgroundColor': '#ECF0F1', 'borderRadius': '10px', 'boxShadow': '2px 2px 12px rgba(0,0,0,0.1)', 'margin-bottom': '20px'}),
+            # Heatmap + Dropdown on the Right
+            html.Div([
+                dcc.Graph(id="dynamic-heatmap", style={'height': '480px'}),  # Increased height
+
+                # Heatmap Selection Dropdown
+                dcc.Dropdown(
+                    id="heatmap-selector",
+                    options=[
+                        {"label": "Applicants", "value": "Applicants"},
+                        {"label": "Schools", "value": "Schools"}
+                    ],
+                    value="Applicants",  # Default selection
+                    clearable=False,
+                    style={'width': '80%', 'margin': 'auto'}
+                )
+            ], style={'width': '50%', 'display': 'flex', 'flexDirection': 'column', 'alignItems': 'center'})  # Centered layout
+        ], style={'display': 'flex', 'gap': '20px'}),  # Ensures side-by-side layout
+    ], style={'padding': '20px', 'backgroundColor': 'white', 'borderRadius': '10px'}),  # 🔹 Applied White Background to Whole Section
+
+], style={'padding': '20px', 'backgroundColor': '#F4F7FF', 'borderRadius': '10px', 'margin-bottom': '20px'}),
         
 html.Div([
-    html.H2("Simulation", style={'color': '#2C3E50', 'textAlign': 'center', 'margin-bottom': '20px'}),
+    html.H2("Simulation (UNDER CONSTRUCTION)", style={'color': '#2C3E50', 'textAlign': 'center', 'margin-bottom': '20px'}),
 
     # White Box that contains everything
     html.Div([
@@ -652,11 +1019,11 @@ html.Div([
     ], style={'padding': '20px', 'backgroundColor': 'white', 'borderRadius': '10px',
               'boxShadow': '2px 2px 12px rgba(0,0,0,0.1)'})  # White background applied to everything inside
 
-], style={'padding': '20px', 'backgroundColor': '#F4F6F6', 'borderRadius': '10px', 
+], style={'padding': '20px', 'backgroundColor': '#F4F7FF', 'borderRadius': '10px', 
           'boxShadow': '2px 2px 12px rgba(0,0,0,0.1)'}),
 
     html.Div([
-        html.H2("Vacancies", style={'color': '#2C3E50', 'textAlign': 'center', 'margin-bottom': '20px'}),
+        html.H2("Vacancies (UNDER CONSTRUCTION)", style={'color': '#2C3E50', 'textAlign': 'center', 'margin-bottom': '20px'}),
         html.Div([
             html.H3("Schools with Most Demand", style={'color': '#22114F', 'textAlign': 'center'}),
             dash_table.DataTable(
@@ -675,7 +1042,7 @@ html.Div([
                 style_data={'backgroundColor': '#ECF0F1', 'color': '#2C3E50', 'textAlign': 'center'}
             )
         ], style={'padding': '20px', 'backgroundColor': 'white', 'borderRadius': '10px', 'boxShadow': '2px 2px 12px rgba(0,0,0,0.1)'})
-    ], style={'padding': '20px', 'backgroundColor': '#F4F6F6', 'borderRadius': '10px', 'boxShadow': '2px 2px 12px rgba(0,0,0,0.1)'}),
+    ], style={'padding': '20px', 'backgroundColor': '#F4F7FF', 'borderRadius': '10px', 'boxShadow': '2px 2px 12px rgba(0,0,0,0.1)'}),
     
     html.Footer("TetherEd, 2025", 
                 style={'textAlign': 'center', 'padding': '20px', 'backgroundColor': '#22114F', 'color': 'white'})
@@ -700,6 +1067,19 @@ def update_heatmap(selection):
         center={'lat': 41.30, 'lon': -72.92}, zoom=12,
         mapbox_style="open-street-map",
         title=title
+    )
+
+    # ✅ Apply Inter to the entire figure
+    fig.update_layout(
+        title={
+            "text": title,
+            "font": {"family": "Inter, sans-serif", "size": 18}  # ✅ Title in Inter
+        },
+        font={"family": "Inter, sans-serif"},  # ✅ Global font setting
+        coloraxis_colorbar=dict(
+            title="Demand",
+            titlefont={"family": "Inter, sans-serif", "size": 14}  # ✅ Color bar label in Inter
+        )
     )
 
     return fig
