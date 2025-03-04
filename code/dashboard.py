@@ -251,8 +251,16 @@ if data_source == "backend":
                 "5th Grade", "6th Grade", "7th Grade", "8th Grade", "9th Grade", "10th Grade", "11th Grade", "12th Grade"]    
 
 elif data_source == "schoolmint":
-    # ✅ Define base path for SchoolMint input data
-    base_path = "/Users/ignaciolepe/Documents/GitHub/nhps-schoolmint-pipeline/1_data/inputs"
+    import os
+
+    # Get the current script directory dynamically
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+
+    # Define base path relative to the script directory
+    base_path = os.path.join(script_dir, "../data/inputs")  # Move up one level and into `data/inputs`
+    base_path = os.path.abspath(base_path)  # Convert to absolute path
+
+    print(base_path)  # Debugging: Ensure it's correct
 
     def load_csvs(year):
         """Load all CSVs for a given year into a dictionary of DataFrames."""
@@ -967,7 +975,7 @@ html.Div([
 
             # Heatmap + Dropdown on the Right
             html.Div([
-                dcc.Graph(id="dynamic-heatmap", style={'height': '480px'}),  # Increased height
+                dcc.Graph(id="dynamic-heatmap", style={'height': '450px', 'width': '100%', 'padding': '10px'}),
 
                 # Heatmap Selection Dropdown
                 dcc.Dropdown(
@@ -1062,6 +1070,7 @@ def update_heatmap(selection):
         df = school_heatmap_df
         title = "School Demand Heatmap"
 
+    # Create heatmap figure
     fig = px.density_mapbox(
         df, lat='lat', lon='lon', z='Demand', radius=10,
         center={'lat': 41.30, 'lon': -72.92}, zoom=12,
@@ -1069,16 +1078,19 @@ def update_heatmap(selection):
         title=title
     )
 
-    # ✅ Apply Inter to the entire figure
+    # ✅ Move the color bar to the bottom
     fig.update_layout(
-        title={
-            "text": title,
-            "font": {"family": "Inter, sans-serif", "size": 18}  # ✅ Title in Inter
-        },
-        font={"family": "Inter, sans-serif"},  # ✅ Global font setting
+        title={"text": title, "font": {"family": "Inter, sans-serif", "size": 18}},
+        font={"family": "Inter, sans-serif"},
         coloraxis_colorbar=dict(
             title="Demand",
-            titlefont={"family": "Inter, sans-serif", "size": 14}  # ✅ Color bar label in Inter
+            titlefont={"family": "Inter, sans-serif", "size": 14},
+            orientation="h",  # ✅ Horizontal orientation
+            x=0.5,  # ✅ Center align
+            xanchor="center",
+            y=-0.2,  # ✅ Move below the graph
+            thicknessmode="pixels", thickness=10,  # ✅ Adjust thickness
+            lenmode="fraction", len=0.7  # ✅ Adjust length (70% of width)
         )
     )
 
