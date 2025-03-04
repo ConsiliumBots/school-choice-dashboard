@@ -1,0 +1,27 @@
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;700&family=Inter:wght@300;400;500;600&display=swap');
+
+/* Apply fonts */
+body, button, input, select, .dash-table-container, .dash-graph {
+    font-family: 'Inter', sans-serif !important; /* Default for body text */
+}
+
+h1, h2, h3, h4, h5, h6 {
+    font-family: 'DM Sans', sans-serif !important; /* Titles use DM Sans */
+}
+
+p {
+    font-family: 'Inter', sans-serif !important; /* Paragraphs use Inter */
+}
+
+/* Set Background Color for the Entire Page */
+body {
+    background-color: #eaefff !important;
+    margin: 0;
+    padding: 0;
+}
+
+/* Ensure the main content is properly spaced */
+html, body, .app-container {
+    min-height: 100vh;  /* Ensures full height */
+    width: 100%;
+}
