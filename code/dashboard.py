@@ -1078,19 +1078,20 @@ def update_heatmap(selection):
         title=title
     )
 
-    # ✅ Move the color bar to the bottom
     fig.update_layout(
-        title={"text": title, "font": {"family": "Inter, sans-serif", "size": 18}},
+        title={"text": title, "font": {"family": "Inter, sans-serif", "size": 18}},  # ✅ Correct
         font={"family": "Inter, sans-serif"},
         coloraxis_colorbar=dict(
-            title="Demand",
-            titlefont={"family": "Inter, sans-serif", "size": 14},
-            orientation="h",  # ✅ Horizontal orientation
-            x=0.5,  # ✅ Center align
+            title=dict(
+                text="Demand",
+                font={"family": "Inter, sans-serif", "size": 14}  # ✅ Correct format
+            ),
+            orientation="h",
+            x=0.5,
             xanchor="center",
-            y=-0.2,  # ✅ Move below the graph
-            thicknessmode="pixels", thickness=10,  # ✅ Adjust thickness
-            lenmode="fraction", len=0.7  # ✅ Adjust length (70% of width)
+            y=-0.2,
+            thicknessmode="pixels", thickness=10,
+            lenmode="fraction", len=0.7
         )
     )
 
