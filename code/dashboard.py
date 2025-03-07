@@ -1017,11 +1017,11 @@ html.Div([
           'boxShadow': '2px 2px 12px rgba(0,0,0,0.1)'}),
 
     html.Div([
-        html.H2("Top & Bottom 10", style={'color': '#2C3E50', 'textAlign': 'center', 'margin-bottom': '20px'}),
+        html.H2("Top", style={'color': '#2C3E50', 'textAlign': 'center', 'margin-bottom': '20px'}),
 
         # White Box that contains everything
         html.Div([
-            # Top 10 Schools with Most Applications
+            # ✅ Top 10 Schools with Most Applications
             html.H3("Top 10 Most Applied Programs", style={'color': '#22114F', 'textAlign': 'center'}),
             dash_table.DataTable(
                 columns=[
@@ -1029,23 +1029,7 @@ html.Div([
                     {"name": "Grade", "id": "Grade"},
                     {"name": "Total Applications", "id": "Total Applications"}
                 ],
-                data=most_demanded_df.to_dict("records"),  # ✅ Pass Top 10
-                style_table={'overflowX': 'auto', 'margin': 'auto', 'width': '90%', 'backgroundColor': 'white', 
-                            'borderRadius': '10px', 'padding': '10px'},
-                style_header={'backgroundColor': '#713BF4', 'color': 'white', 
-                            'fontWeight': 'bold', 'textAlign': 'center'},
-                style_data={'backgroundColor': '#ECF0F1', 'color': '#2C3E50', 'textAlign': 'center'}
-            ),
-
-            # Bottom 10 Schools with Least Applications
-            html.H3("Bottom 10 Least Applied Programs", style={'color': '#22114F', 'textAlign': 'center'}),
-            dash_table.DataTable(
-                columns=[
-                    {"name": "Program", "id": "Program"},
-                    {"name": "Grade", "id": "Grade"},
-                    {"name": "Total Applications", "id": "Total Applications"}
-                ],
-                data=least_demanded_df.to_dict("records"),  # ✅ Pass Bottom 10
+                data=most_demanded_df.to_dict("records"),  # ✅ Only Top 10
                 style_table={'overflowX': 'auto', 'margin': 'auto', 'width': '90%', 'backgroundColor': 'white', 
                             'borderRadius': '10px', 'padding': '10px'},
                 style_header={'backgroundColor': '#713BF4', 'color': 'white', 
