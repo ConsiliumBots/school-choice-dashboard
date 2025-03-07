@@ -251,16 +251,7 @@ if data_source == "backend":
                 "5th Grade", "6th Grade", "7th Grade", "8th Grade", "9th Grade", "10th Grade", "11th Grade", "12th Grade"]    
 
 elif data_source == "schoolmint":
-    import os
-
-    # Get the current script directory dynamically
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-
-    # Define base path relative to the script directory
-    base_path = os.path.join(script_dir, "../data/inputs")  # Move up one level and into `data/inputs`
-    base_path = os.path.abspath(base_path)  # Convert to absolute path
-
-    print(base_path)  # Debugging: Ensure it's correct
+    base_path = "/Users/ignaciolepe/Documents/GitHub/nhps-schoolmint-pipeline/1_data/inputs"
 
     def load_csvs(year):
         """Load all CSVs for a given year into a dictionary of DataFrames."""
@@ -1097,6 +1088,7 @@ def update_heatmap(selection):
 
     return fig
 
-# Run app locally
-if __name__ == '__main__':
-    app.run_server(debug=True)
+from pyngrok import ngrok
+
+if __name__ == "__main__":
+    app.run_server(debug=True, host="0.0.0.0", port=8080)
