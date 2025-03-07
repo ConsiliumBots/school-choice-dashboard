@@ -395,16 +395,6 @@ elif data_source == "schoolmint":
     applications_current_year_df["Program"] = applications_current_year_df["Program"].astype(str)
     schools_df["id"] = schools_df["id"].astype(str)
 
-    # ✅ Merge applications with students_annual_df and schools_df
-    school_demand_df = (
-        applications_current_year_df
-        .merge(students_annual_df[['student_id', 'grade']], on='student_id', how='left')
-        .merge(schools_df[['id', 'school_name']], left_on='Program', right_on='id', how='left')
-        .groupby(['school_name', 'grade'])
-        .size()
-        .reset_index(name="Total Applications")
-    )
-
     # Convert float columns to integers where possible
     columns_to_fix = [
         "Applications", 
@@ -414,13 +404,18 @@ elif data_source == "schoolmint":
     for col in columns_to_fix:
         applications_per_day_df[col] = applications_per_day_df[col].fillna(0).astype(int)
 
-    # ✅ Handle missing school names
-    school_demand_df = school_demand_df.dropna(subset=['school_name'])
+    # ✅ Group by 'Program' and 'Grade' to count total applications
+    school_demand_df = (
+        applications_current_year_df
+        .groupby(['Program', 'Grade'])
+        .size()
+        .reset_index(name="Total Applications")
+    )
 
-    # ✅ Simulate "Used Vacants" (Replace with actual data if available)
-    school_demand_df["Total Vacants"] = np.random.randint(20, 100, size=len(school_demand_df))
-    school_demand_df["Used Vacants"] = np.minimum(school_demand_df["Total Applications"], school_demand_df["Total Vacants"])
-    school_demand_df["% Used"] = (school_demand_df["Used Vacants"] / school_demand_df["Total Vacants"]) * 100
+    print("Final school_demand_df:\n", school_demand_df.head())
+
+    # ✅ Remove rows where Program (school ID) is missing
+    school_demand_df = school_demand_df.dropna(subset=['Program'])
 
     # ✅ Create demand heatmap data
     heatmap_df = (
@@ -1022,26 +1017,47 @@ html.Div([
           'boxShadow': '2px 2px 12px rgba(0,0,0,0.1)'}),
 
     html.Div([
-        html.H2("Vacancies (UNDER CONSTRUCTION)", style={'color': '#2C3E50', 'textAlign': 'center', 'margin-bottom': '20px'}),
+        html.H2("Top & Bottom 10", style={'color': '#2C3E50', 'textAlign': 'center', 'margin-bottom': '20px'}),
+
+        # White Box that contains everything
         html.Div([
-            html.H3("Schools with Most Demand", style={'color': '#22114F', 'textAlign': 'center'}),
+            # Top 10 Schools with Most Applications
+            html.H3("Top 10 Most Applied Programs", style={'color': '#22114F', 'textAlign': 'center'}),
             dash_table.DataTable(
-                columns=[{"name": col, "id": col} for col in most_demanded_df.columns],
-                data=most_demanded_df.to_dict("records"),
-                style_table={'overflowX': 'auto', 'margin': 'auto', 'width': '90%', 'backgroundColor': 'white', 'borderRadius': '10px', 'padding': '10px'},
-                style_header={'backgroundColor': '#713BF4', 'color': 'white', 'fontWeight': 'bold', 'textAlign': 'center'},
+                columns=[
+                    {"name": "Program", "id": "Program"},
+                    {"name": "Grade", "id": "Grade"},
+                    {"name": "Total Applications", "id": "Total Applications"}
+                ],
+                data=most_demanded_df.to_dict("records"),  # ✅ Pass Top 10
+                style_table={'overflowX': 'auto', 'margin': 'auto', 'width': '90%', 'backgroundColor': 'white', 
+                            'borderRadius': '10px', 'padding': '10px'},
+                style_header={'backgroundColor': '#713BF4', 'color': 'white', 
+                            'fontWeight': 'bold', 'textAlign': 'center'},
                 style_data={'backgroundColor': '#ECF0F1', 'color': '#2C3E50', 'textAlign': 'center'}
             ),
-            html.H3("Schools with Least Demand", style={'color': '#22114F', 'textAlign': 'center'}),
+
+            # Bottom 10 Schools with Least Applications
+            html.H3("Bottom 10 Least Applied Programs", style={'color': '#22114F', 'textAlign': 'center'}),
             dash_table.DataTable(
-                columns=[{"name": col, "id": col} for col in least_demanded_df.columns],
-                data=least_demanded_df.to_dict("records"),
-                style_table={'overflowX': 'auto', 'margin': 'auto', 'width': '90%', 'backgroundColor': 'white', 'borderRadius': '10px', 'padding': '10px'},
-                style_header={'backgroundColor': '#713BF4', 'color': 'white', 'fontWeight': 'bold', 'textAlign': 'center'},
+                columns=[
+                    {"name": "Program", "id": "Program"},
+                    {"name": "Grade", "id": "Grade"},
+                    {"name": "Total Applications", "id": "Total Applications"}
+                ],
+                data=least_demanded_df.to_dict("records"),  # ✅ Pass Bottom 10
+                style_table={'overflowX': 'auto', 'margin': 'auto', 'width': '90%', 'backgroundColor': 'white', 
+                            'borderRadius': '10px', 'padding': '10px'},
+                style_header={'backgroundColor': '#713BF4', 'color': 'white', 
+                            'fontWeight': 'bold', 'textAlign': 'center'},
                 style_data={'backgroundColor': '#ECF0F1', 'color': '#2C3E50', 'textAlign': 'center'}
             )
-        ], style={'padding': '20px', 'backgroundColor': 'white', 'borderRadius': '10px', 'boxShadow': '2px 2px 12px rgba(0,0,0,0.1)'})
-    ], style={'padding': '20px', 'backgroundColor': '#F4F7FF', 'borderRadius': '10px', 'boxShadow': '2px 2px 12px rgba(0,0,0,0.1)'}),
+
+        ], style={'padding': '20px', 'backgroundColor': 'white', 'borderRadius': '10px', 
+                'boxShadow': '2px 2px 12px rgba(0,0,0,0.1)'})  # White background applied to everything inside
+
+    ], style={'padding': '20px', 'backgroundColor': '#F4F7FF', 'borderRadius': '10px', 
+            'boxShadow': '2px 2px 12px rgba(0,0,0,0.1)'}),
     
     html.Footer("TetherEd, 2025", 
                 style={'textAlign': 'center', 'padding': '20px', 'backgroundColor': '#22114F', 'color': 'white'})
@@ -1088,7 +1104,11 @@ def update_heatmap(selection):
 
     return fig
 
-from pyngrok import ngrok
 
-if __name__ == "__main__":
-    app.run_server(debug=True, host="0.0.0.0", port=8080)
+if __name__ == '__main__':
+    app.run_server(debug=True)
+
+# from pyngrok import ngrok
+
+# if __name__ == "__main__":
+#     app.run_server(debug=True, host="0.0.0.0", port=8080)
