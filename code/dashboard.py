@@ -6,6 +6,9 @@
 #   Author: Ignacio Lepe
 #   Created: 12/02/2025
 #   Modified: 14/02/2025 
+#
+#   Instructions to deploy: 1) Run dashboard.py, 2) run "ngrok http http://localhost:8080" in terminal, 3) open Forwarding link
+#
 ####################################################################
 
 # Pedir fonts
@@ -32,6 +35,9 @@ import os
 import glob
 
 from db_connection import conect_bd
+
+# Set Mapbox Access Token
+px.set_mapbox_access_token("pk.eyJ1IjoiaWxlcGUiLCJhIjoiY204eDhkZHp1MDB3ajJzcHZoZmNjbmJ1MCJ9.wHbBLFAuRSzIfNJzxFvnIg")
 
 # Select input data
 data_source = "schoolmint" # select source of data between: "backend", "schoolmint", "simulated"
@@ -718,11 +724,11 @@ fig1.update_layout(
     xaxis_title="Probability",
     yaxis_title="Cumulative Fraction",
     xaxis={
-        "titlefont": {"family": "Inter, sans-serif", "size": 14},  # ✅ X-axis title in Inter
+        "tickfont": {"family": "Inter, sans-serif", "size": 14},  # ✅ X-axis title in Inter
         "tickfont": {"family": "Inter, sans-serif", "size": 12}  # ✅ X-axis tick labels in Inter
     },
     yaxis={
-        "titlefont": {"family": "Inter, sans-serif", "size": 14},  # ✅ Y-axis title in Inter
+        "tickfont": {"family": "Inter, sans-serif", "size": 14},  # ✅ Y-axis title in Inter
         "tickfont": {"family": "Inter, sans-serif", "size": 12}  # ✅ Y-axis tick labels in Inter
     },
     template="plotly_white",
@@ -981,67 +987,29 @@ html.Div([
 ], style={'padding': '20px', 'backgroundColor': '#F4F7FF', 'borderRadius': '10px', 'margin-bottom': '20px'}),
         
 html.Div([
-    html.H2("Simulation (UNDER CONSTRUCTION)", style={'color': '#2C3E50', 'textAlign': 'center', 'margin-bottom': '20px'}),
+    html.H2("Top", style={'color': '#2C3E50', 'textAlign': 'center', 'margin-bottom': '20px'}),
 
     # White Box that contains everything
     html.Div([
-        # Row for Distribution Graph (Left) & Pie Chart (Right)
-        html.Div([
-            dcc.Graph(figure=fig1, style={'flex': '1'}),  # Interactive probability distribution graph
-            dcc.Graph(
-                figure=px.pie(
-                    values=[sum(assignment_counts[:-1]), assignment_counts[-1]],
-                    names=["Assigned", "Not Assigned"],
-                    title="Assignment Fraction",
-                    color_discrete_sequence=["#22114F", "#5DDBDB"]  # Green for Assigned, Red for Not Assigned
-                ), 
-                style={'flex': '1'}
-            ),
-        ], style={'display': 'flex', 'gap': '20px'}),  # Displays both graphs side by side
-
-        # Assignment Preferences Table
-        html.H3("Assignment Preferences", style={'color': '#22114F', 'textAlign': 'center'}),
+        # ✅ Top 10 Schools with Most Applications
+        html.H3("Top 10 Most Applied Programs", style={'color': '#22114F', 'textAlign': 'center'}),
         dash_table.DataTable(
-            columns=[{"name": "Assignment", "id": "Assignment"}, {"name": "Percentage", "id": "Fraction"}],
-            data=assignment_df.to_dict("records"),
-            style_table={'overflowX': 'auto', 'margin': 'auto', 'width': '90%', 
-                         'backgroundColor': 'white', 'borderRadius': '10px', 'padding': '10px'},
+            columns=[
+                {"name": "Program", "id": "Program"},
+                {"name": "Grade", "id": "Grade"},
+                {"name": "Total Applications", "id": "Total Applications"}
+            ],
+            data=most_demanded_df.to_dict("records"),  # ✅ Only Top 10
+            style_table={'overflowX': 'auto', 'margin': 'auto', 'width': '90%', 'backgroundColor': 'white', 
+                        'borderRadius': '10px', 'padding': '10px'},
             style_header={'backgroundColor': '#713BF4', 'color': 'white', 
                           'fontWeight': 'bold', 'textAlign': 'center'},
             style_data={'backgroundColor': '#ECF0F1', 'color': '#2C3E50', 'textAlign': 'center'}
         )
-    ], style={'padding': '20px', 'backgroundColor': 'white', 'borderRadius': '10px',
-              'boxShadow': '2px 2px 12px rgba(0,0,0,0.1)'})  # White background applied to everything inside
 
-], style={'padding': '20px', 'backgroundColor': '#F4F7FF', 'borderRadius': '10px', 
-          'boxShadow': '2px 2px 12px rgba(0,0,0,0.1)'}),
+    ], style={'padding': '20px', 'backgroundColor': 'white', 'borderRadius': '10px'})  # Removed boxShadow to match Applications section
 
-    html.Div([
-        html.H2("Top", style={'color': '#2C3E50', 'textAlign': 'center', 'margin-bottom': '20px'}),
-
-        # White Box that contains everything
-        html.Div([
-            # ✅ Top 10 Schools with Most Applications
-            html.H3("Top 10 Most Applied Programs", style={'color': '#22114F', 'textAlign': 'center'}),
-            dash_table.DataTable(
-                columns=[
-                    {"name": "Program", "id": "Program"},
-                    {"name": "Grade", "id": "Grade"},
-                    {"name": "Total Applications", "id": "Total Applications"}
-                ],
-                data=most_demanded_df.to_dict("records"),  # ✅ Only Top 10
-                style_table={'overflowX': 'auto', 'margin': 'auto', 'width': '90%', 'backgroundColor': 'white', 
-                            'borderRadius': '10px', 'padding': '10px'},
-                style_header={'backgroundColor': '#713BF4', 'color': 'white', 
-                            'fontWeight': 'bold', 'textAlign': 'center'},
-                style_data={'backgroundColor': '#ECF0F1', 'color': '#2C3E50', 'textAlign': 'center'}
-            )
-
-        ], style={'padding': '20px', 'backgroundColor': 'white', 'borderRadius': '10px', 
-                'boxShadow': '2px 2px 12px rgba(0,0,0,0.1)'})  # White background applied to everything inside
-
-    ], style={'padding': '20px', 'backgroundColor': '#F4F7FF', 'borderRadius': '10px', 
-            'boxShadow': '2px 2px 12px rgba(0,0,0,0.1)'}),
+], style={'padding': '20px', 'backgroundColor': '#F4F7FF', 'borderRadius': '10px', 'margin-bottom': '20px'}),
     
     html.Footer("TetherEd, 2025", 
                 style={'textAlign': 'center', 'padding': '20px', 'backgroundColor': '#22114F', 'color': 'white'})
@@ -1065,7 +1033,7 @@ def update_heatmap(selection):
     fig = px.density_mapbox(
         df, lat='lat', lon='lon', z='Demand', radius=10,
         center={'lat': 41.30, 'lon': -72.92}, zoom=12,
-        mapbox_style="open-street-map",
+        mapbox_style="dark",
         title=title
     )
 
@@ -1089,10 +1057,10 @@ def update_heatmap(selection):
     return fig
 
 
-if __name__ == '__main__':
-    app.run_server(debug=True)
+#if __name__ == '__main__':
+#    app.run_server(debug=True)
 
-# from pyngrok import ngrok
+from pyngrok import ngrok
 
-# if __name__ == "__main__":
-#     app.run_server(debug=True, host="0.0.0.0", port=8080)
+if __name__ == "__main__":
+     app.run_server(debug=True, host="0.0.0.0", port=8080)
