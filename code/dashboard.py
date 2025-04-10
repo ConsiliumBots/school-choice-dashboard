@@ -34,8 +34,6 @@ from datetime import datetime
 import os
 import glob
 
-from db_connection import conect_bd
-
 # Set Mapbox Access Token
 px.set_mapbox_access_token("pk.eyJ1IjoiaWxlcGUiLCJhIjoiY204eDhkZHp1MDB3ajJzcHZoZmNjbmJ1MCJ9.wHbBLFAuRSzIfNJzxFvnIg")
 
@@ -52,6 +50,8 @@ last_day_previous_year = pd.to_datetime("2025-03-02")
 
 if data_source == "backend":
     
+    from db_connection import conect_bd
+
     ################# Fetch backend data 
 
     # Define environment and database schema
@@ -257,7 +257,7 @@ if data_source == "backend":
                 "5th Grade", "6th Grade", "7th Grade", "8th Grade", "9th Grade", "10th Grade", "11th Grade", "12th Grade"]    
 
 elif data_source == "schoolmint":
-    base_path = "/Users/ignaciolepe/Documents/GitHub/nhps-schoolmint-pipeline/1_data/inputs"
+    base_path = "C:/Users/ignaciolepe/Documents/GitHub/school-choice-dashboard/data/inputs"
 
     def load_csvs(year):
         """Load all CSVs for a given year into a dictionary of DataFrames."""
@@ -446,10 +446,12 @@ elif data_source == "schoolmint":
     # ✅ Merge applications → programs → schools
     school_heatmap_df = (
         applications_current_year_df
-        .merge(programs_df[['id', 'school_id']], left_on='program_id', right_on='id', how='left')
-        .drop(columns=['id'])  # Drop duplicate 'id' from programs_df
-        .merge(schools_df[['id', 'lat', 'lon', 'school_name']], left_on='school_id', right_on='id', how='left')
-        .drop(columns=['id'])  # Drop duplicate 'id' from schools_df
+        .assign(program_id=lambda x: x['program_id'].astype(str))  # Convert to string
+        .merge(programs_df[['id', 'school_id']].assign(id=lambda x: x['id'].astype(str)), 
+              left_on='program_id', right_on='id', how='left')
+        .merge(schools_df[['id', 'school_name', 'lat', 'lon']].assign(id=lambda x: x['id'].astype(str)), 
+              left_on='school_id', right_on='id', how='left')
+        .rename(columns={'lng': 'lon'})  # Rename lng to lon for consistency
         .groupby(['lat', 'lon', 'school_name'])['student_id']
         .nunique()
         .reset_index(name="Total Applicants")  # Count unique applicants per school
@@ -467,6 +469,31 @@ elif data_source == "schoolmint":
         df["lon"] = pd.to_numeric(df["lon"], errors="coerce")
         df.dropna(subset=['lat', 'lon'], inplace=True)
 
+    # Create risk heatmap data by merging with student_assignment_summary.csv
+    # Load assignment data
+    assignment_data = pd.read_csv("data/inputs/2025/student_assignment_summary.csv")
+    
+    # Ensure student_id is the same type in all dataframes
+    assignment_data['student_id'] = assignment_data['student_id'].astype(str)
+    students_df['student_id'] = students_df['student_id'].astype(str)
+    students_annual_df['student_id'] = students_annual_df['student_id'].astype(str)
+    
+    # Create risk heatmap data
+    risk_heatmap_df = (
+        students_df[['student_id']]
+        .merge(students_annual_df[['student_id', 'address_lat', 'address_lng']], on='student_id', how='left')
+        .merge(assignment_data[['student_id', 'unmatched']], on='student_id', how='left')
+        .rename(columns={'address_lat': 'lat', 'address_lng': 'lon', 'unmatched': 'Risk'})
+        .groupby(['lat', 'lon'])['Risk']
+        .mean()
+        .reset_index()
+    )
+    
+    # Convert lat/lon to numeric & drop NaN
+    risk_heatmap_df["lat"] = pd.to_numeric(risk_heatmap_df["lat"], errors="coerce")
+    risk_heatmap_df["lon"] = pd.to_numeric(risk_heatmap_df["lon"], errors="coerce")
+    risk_heatmap_df.dropna(subset=['lat', 'lon', 'Risk'], inplace=True)
+
     # ✅ Standardize Grade Names
     grade_mapping = {
         "PreK3": "PreK-3", "PreK4": "PreK-4", "K": "Kindergarten",
@@ -483,31 +510,75 @@ elif data_source == "schoolmint":
 
     ############### SIMULATION SECTION. PLEASE UPDATE LATER WHEN SIMULAION API IS DONE
 
-    # Simulate data for the simulation section
-    num_applicants = 1000
-    assigned_fraction = np.random.uniform(0.6, 0.9, num_applicants)
-    assignment_counts = np.random.dirichlet([4, 3, 2, 1, 1, 2, 2], size=1)[0] * num_applicants
-    assignment_labels = [
-        "1st Preference", "2nd Preference", "3rd Preference",
-        "4th Preference", "+5th Preference", "Non-Assigned"
-    ]
+    # Load assignment data
+    assignment_data = pd.read_csv("data/inputs/2025/student_assignment_summary.csv")
+    
+    non_assigned_prob = assignment_data['unmatched']
+    
+    # Create rank distribution for all students, handling missing values
+    # Convert all values to strings before sorting to avoid type comparison errors
+    rank_dist = assignment_data['final_rank'].fillna('Unassigned').astype(str).value_counts()
+    # Sort by converting to numeric where possible, keeping 'Unassigned' at the end
+    rank_dist = rank_dist.reindex(sorted(rank_dist.index, key=lambda x: float(x) if x != 'Unassigned' else float('inf')))
+    rank_dist_pct = (rank_dist / len(assignment_data) * 100).round(1)
+    
+    # Create assignment summary dataframe with rank distribution
+    assignment_df = pd.DataFrame({
+        'Assignment': [
+            'First Choice' if rank == '1.0' else
+            'Second Choice' if rank == '2.0' else
+            'Third Choice' if rank == '3.0' else
+            'Fourth Choice' if rank == '4.0' else
+            'Fifth Choice' if rank == '5.0' else
+            'Sixth Choice' if rank == '6.0' else
+            'Unassigned' if rank == 'Unassigned' else f'Rank {rank}'
+            for rank in rank_dist_pct.index
+        ],
+        'Fraction': rank_dist_pct.values
+    })
 
-    # Ensure assignment_counts has the same length as assignment_labels
-    num_preferences = len(assignment_labels)  # Ensure matching lengths
-    assignment_counts = np.random.dirichlet([4, 3, 2, 1, 1, 2], size=1)[0] * num_applicants
+    # Create figure for rank distribution
+    fig1 = go.Figure()
+    fig1.add_trace(go.Bar(
+        x=rank_dist_pct.index,
+        y=rank_dist_pct.values,
+        marker_color='#713BF4',
+        text=rank_dist_pct.values.round(1),
+        textposition='auto',
+    ))
+    fig1.update_layout(
+        title='Distribution of Final Assignment Ranks',
+        xaxis_title='Rank',
+        yaxis_title='Percentage of Students (%)',
+        showlegend=False,
+        plot_bgcolor='white',
+        paper_bgcolor='white',
+        font=dict(size=12),
+        margin=dict(t=30, l=50, r=50, b=50)
+    )
+    fig1.update_xaxes(showgrid=True, gridwidth=1, gridcolor='#E5E5E5')
+    fig1.update_yaxes(showgrid=True, gridwidth=1, gridcolor='#E5E5E5')
 
-    # Ensure the generated counts have the correct length
-    if len(assignment_counts) != num_preferences:
-        assignment_counts = np.append(assignment_counts, num_applicants - sum(assignment_counts))  # Adjust to match total
-
-    assignment_df = pd.DataFrame({"Assignment": assignment_labels, "Fraction": (assignment_counts / 10).round(1)})
-
-    # Generate simulated data
-    num_applicants = 1000
-    non_assigned_prob = np.random.rand(num_applicants)  # Probabilities of non-assignment  
+    # ✅ Rename 'id' to 'student_id' in students_df to match students_annual_df
+    students_df.rename(columns={'id': 'student_id'}, inplace=True)
 
     most_demanded_df = school_demand_df.sort_values("Total Applications", ascending=False).head(10)
     least_demanded_df = school_demand_df.sort_values("Total Applications", ascending=True).head(10)
+
+    # Calculate percentage of applicants with low assignment probability
+    low_prob_threshold = 0.30
+    low_prob_count = sum(1 - non_assigned_prob < low_prob_threshold)
+    low_prob_percentage = (low_prob_count / len(non_assigned_prob)) * 100
+
+    # Calculate percentage of applicants with medium assignment probability
+    medium_prob_threshold = 0.5
+    medium_prob_count = sum(1 - non_assigned_prob < medium_prob_threshold)
+    medium_prob_percentage = (medium_prob_count / len(non_assigned_prob)) * 100
+
+    # Calculate percentage of applicants with high assignment probability (low risk)
+    high_prob_threshold = 0.8
+    high_prob_count = sum(1 - non_assigned_prob > high_prob_threshold)
+    high_prob_percentage = (high_prob_count / len(non_assigned_prob)) * 100
 
 
 elif data_source == "simulated":
@@ -687,38 +758,94 @@ y_vals = kde(x_vals)
 # Create the figure
 fig1 = go.Figure()
 
-# Add the histogram with cumulative probability (Change color here)
-fig1.add_trace(go.Histogram(
-    x=non_assigned_prob,
-    nbinsx=30,
-    histnorm='probability density',
-    cumulative=dict(enabled=True),  # Enables cumulative probability display
-    marker=dict(color='#22114F', opacity=1),  # Blue color for histogram
-    name="Cumulative Probability"
+# Sort the probabilities for a continuous cumulative sum
+sorted_probs = np.sort(1 - non_assigned_prob)
+cumulative_sum = np.arange(1, len(sorted_probs) + 1) / len(sorted_probs)
+
+# Add the continuous cumulative probability line
+fig1.add_trace(go.Scatter(
+    x=sorted_probs,
+    y=cumulative_sum,
+    mode='lines',
+    line=dict(color='#22114F', width=2),
+    name="Cumulative Probability",
+    fill='tozeroy',
+    fillcolor='rgba(34, 17, 79, 0.2)'
 ))
 
-# Add the density curve (Change color here)
+# Add the density curve
 fig1.add_trace(go.Scatter(
-    x=x_vals,
+    x=1 - x_vals,  # Invert the x values to show assignment probability
     y=y_vals,
     mode='lines',
     line=dict(color='#5DDBDB', width=2),  # Red color for density curve
     name="Density Curve"
 ))
 
-# Update layout for interactivity
-fig1.update_layout(
-    title="Probability Distribution of Non-Assignment",
-    xaxis_title="Probability",
-    yaxis_title="Cumulative Fraction",
-    template="plotly_white",
-    hovermode="x"  # Enables hover interaction along the x-axis
+# Add a red shaded area for values lower than 0.05
+fig1.add_trace(go.Scatter(
+    x=[0, 0.30, 0.30, 0],
+    y=[0, 0, 1, 1],
+    fill='toself',
+    fillcolor='rgba(215, 0, 90, 0.2)',  # Light red with transparency
+    line=dict(color='rgba(215, 0, 90, 0.5)', width=1),
+    name="High Risk Region",
+    showlegend=False
+))
+
+# Add a vertical line at x=0.05
+fig1.add_shape(
+    type="line",
+    x0=0.30,
+    y0=0,
+    x1=0.30,
+    y1=1,
+    line=dict(
+        color="rgba(215, 0, 90, 0.8)",
+        width=2,
+        dash="dash",
+    ),
+)
+
+# Add annotation for the threshold
+fig1.add_annotation(
+    x=0.30,
+    y=0.95,
+    text="30% Threshold",
+    showarrow=False,
+    font=dict(
+        family="Inter, sans-serif",
+        size=12,
+        color="rgba(215, 0, 90, 0.8)"
+    ),
+    bgcolor="rgba(255, 255, 255, 0.7)",
+    bordercolor="rgba(215, 0, 90, 0.5)",
+    borderwidth=1,
+    borderpad=4
+)
+
+# Add "High Risk" label in the shaded area
+fig1.add_annotation(
+    x=0.15,
+    y=0.5,
+    text="High Risk",
+    showarrow=False,
+    font=dict(
+        family="Inter, sans-serif",
+        size=16,
+        color="rgba(215, 0, 90, 0.8)",
+        weight="bold"
+    ),
+    bgcolor="rgba(255, 255, 255, 0.7)",
+    bordercolor="rgba(215, 0, 90, 0.5)",
+    borderwidth=1,
+    borderpad=4
 )
 
 # Update layout for interactivity with Inter font
 fig1.update_layout(
     title={
-        "text": "Probability Distribution of Non-Assignment",
+        "text": "Distribution of Expected Assignment Probability",
         "font": {"family": "Inter, sans-serif", "size": 18}  # ✅ Title in Inter
     },
     xaxis_title="Probability",
@@ -749,11 +876,11 @@ for i in range(len(applications_per_day_df)):
 
     # Determine arrow properties
     if difference > 0:
-        arrow_color = "#27AE60"  # Green for positive
+        arrow_color = "#28B911"  # Green for positive
         num_positive_arrows += 1  # Increase positive counter
         arrow_text = f"▲ {difference}"
     elif difference < 0:
-        arrow_color = "#E74C3C"  # Red for negative
+        arrow_color = "#D7005A"  # Red for negative
         num_negative_arrows += 1  # Increase negative counter
         arrow_text = f"▼ {abs(difference)}"
     else:
@@ -911,109 +1038,306 @@ app.layout = html.Div([
             style={'textAlign': 'center', 'color': '#FFFFFF', 'backgroundColor': '#0B114D',  
                    'padding': '10px', 'borderRadius': '10px', 'width': '100%', 'fontWeight': 'normal'}),               
     
-html.Div([
-    html.H2("Summary", style={'color': '#2C3E50', 'textAlign': 'center', 'margin-bottom': '20px'}),
-
     html.Div([
-        html.Div([
-            html.H3("Total Applicants", style={'color': '#22114F', 'textAlign': 'center'}),
-            html.P(f"{total_applicants:,}", style={'fontSize': '24px', 'textAlign': 'center', 'fontWeight': 'bold'})
-        ], style={'flex': '1', 'padding': '10px'}),
+        html.H2("Summary", style={'color': '#2C3E50', 'textAlign': 'center', 'margin-bottom': '20px'}),
 
         html.Div([
-            html.H3("Total Applicants Last Year", style={'color': '#22114F', 'textAlign': 'center'}),
-            html.P(f"{total_applicants_last_year:,}", style={'fontSize': '24px', 'textAlign': 'center', 'fontWeight': 'bold'})
-        ], style={'flex': '1', 'padding': '10px'}),
-
-        html.Div([
-            html.H3(f"Progress as of {progress_date}", style={'color': '#22114F', 'textAlign': 'center'}),
-            html.P(f"{progress_percentage:.1f}%", 
-                   style={'fontSize': '24px', 'textAlign': 'center', 'fontWeight': 'bold', 
-                          'color': '#D7005A' if progress_percentage < 100 else '#28B911'})
-        ], style={'flex': '1', 'padding': '10px'}),
-
-        # New fourth statistic for positive vs negative arrow annotations
-        html.Div([
-            html.H3("Application Trends", style={'color': '#22114F', 'textAlign': 'center'}),
-            html.P([
-                html.Span(f"▲ {num_positive_arrows}  ", style={'color': '#28B911', 'fontWeight': 'bold'}),  # Green for positive arrows
-                html.Span(f"▼ {num_negative_arrows}", style={'color': '#D7005A', 'fontWeight': 'bold'})  # Red for negative arrows
-            ], style={'fontSize': '24px', 'textAlign': 'center'})
-        ], style={'flex': '1', 'padding': '10px'}),
-
-    ], style={'display': 'flex', 'justifyContent': 'space-around', 'backgroundColor': 'white', 
-              'borderRadius': '10px', 'padding': '20px', 'boxShadow': '2px 2px 12px rgba(0,0,0,0.1)'})
-], style={'padding': '20px', 'backgroundColor': '#F4F7FF', 'borderRadius': '10px', 
-          'boxShadow': '2px 2px 12px rgba(0,0,0,0.1)'}),
-    
-
-html.Div([
-    html.H2("Applications", style={'color': '#2C3E50', 'textAlign': 'center', 'margin-bottom': '20px'}),
-
-    # 🔹 White Background Applied Here
-    html.Div([
-        # Row for main application charts
-        html.Div([
-            dcc.Graph(figure=fig, style={'width': '50%'}),  # Applications per Day
-            dcc.Graph(figure=fig_cumulative, style={'width': '50%'}),  # Cumulative Applications
-        ], style={'display': 'flex', 'gap': '20px'}),
-
-        # Row for Applications by Grade (Donut Chart) + Heatmap with Dropdown
-        html.Div([
-            # Donut Chart on the Left
             html.Div([
-                dcc.Graph(figure=fig_bar)
-            ], style={'width': '50%'}),  # Donut Chart Container
+                html.H3("Total Applicants", style={'color': '#22114F', 'textAlign': 'center'}),
+                html.P(f"{total_applicants:,}", style={'fontSize': '24px', 'textAlign': 'center', 'fontWeight': 'bold'})
+            ], style={'flex': '1', 'padding': '10px'}),
 
-            # Heatmap + Dropdown on the Right
             html.Div([
-                dcc.Graph(id="dynamic-heatmap", style={'height': '450px', 'width': '100%', 'padding': '10px'}),
+                html.H3("Total Applicants Last Year", style={'color': '#22114F', 'textAlign': 'center'}),
+                html.P(f"{total_applicants_last_year:,}", style={'fontSize': '24px', 'textAlign': 'center', 'fontWeight': 'bold'})
+            ], style={'flex': '1', 'padding': '10px'}),
 
-                # Heatmap Selection Dropdown
-                dcc.Dropdown(
-                    id="heatmap-selector",
-                    options=[
-                        {"label": "Applicants", "value": "Applicants"},
-                        {"label": "Schools", "value": "Schools"}
-                    ],
-                    value="Applicants",  # Default selection
-                    clearable=False,
-                    style={'width': '80%', 'margin': 'auto'}
-                )
-            ], style={'width': '50%', 'display': 'flex', 'flexDirection': 'column', 'alignItems': 'center'})  # Centered layout
-        ], style={'display': 'flex', 'gap': '20px'}),  # Ensures side-by-side layout
-    ], style={'padding': '20px', 'backgroundColor': 'white', 'borderRadius': '10px'}),  # 🔹 Applied White Background to Whole Section
+            html.Div([
+                html.H3(f"Progress as of {progress_date}", style={'color': '#22114F', 'textAlign': 'center'}),
+                html.P(f"{progress_percentage:.1f}%", 
+                       style={'fontSize': '24px', 'textAlign': 'center', 'fontWeight': 'bold', 
+                              'color': '#D7005A' if progress_percentage < 100 else '#28B911'})
+            ], style={'flex': '1', 'padding': '10px'}),
 
-], style={'padding': '20px', 'backgroundColor': '#F4F7FF', 'borderRadius': '10px', 'margin-bottom': '20px'}),
-        
-html.Div([
-    html.H2("Top", style={'color': '#2C3E50', 'textAlign': 'center', 'margin-bottom': '20px'}),
+            # New fourth statistic for positive vs negative arrow annotations
+            html.Div([
+                html.H3("Application Trends", style={'color': '#22114F', 'textAlign': 'center'}),
+                html.P([
+                    html.Span(f"▲ {num_positive_arrows}  ", style={'color': '#28B911', 'fontWeight': 'bold'}),  # Green for positive arrows
+                    html.Span(f"▼ {num_negative_arrows}", style={'color': '#D7005A', 'fontWeight': 'bold'})  # Red for negative arrows
+                ], style={'fontSize': '24px', 'textAlign': 'center'})
+            ], style={'flex': '1', 'padding': '10px'}),
 
-    # White Box that contains everything
+        ], style={'display': 'flex', 'justifyContent': 'space-around', 'backgroundColor': 'white', 
+                  'borderRadius': '10px', 'padding': '20px', 'boxShadow': '2px 2px 12px rgba(0,0,0,0.1)'})
+    ], style={'padding': '20px', 'backgroundColor': '#F4F7FF', 'borderRadius': '10px', 
+              'boxShadow': '2px 2px 12px rgba(0,0,0,0.1)'}),
+
     html.Div([
-        # ✅ Top 10 Schools with Most Applications
-        html.H3("Top 10 Most Applied Programs", style={'color': '#22114F', 'textAlign': 'center'}),
-        dash_table.DataTable(
-            columns=[
-                {"name": "Program", "id": "Program"},
-                {"name": "Grade", "id": "Grade"},
-                {"name": "Total Applications", "id": "Total Applications"}
-            ],
-            data=most_demanded_df.to_dict("records"),  # ✅ Only Top 10
-            style_table={'overflowX': 'auto', 'margin': 'auto', 'width': '90%', 'backgroundColor': 'white', 
-                        'borderRadius': '10px', 'padding': '10px'},
-            style_header={'backgroundColor': '#713BF4', 'color': 'white', 
-                          'fontWeight': 'bold', 'textAlign': 'center'},
-            style_data={'backgroundColor': '#ECF0F1', 'color': '#2C3E50', 'textAlign': 'center'}
-        )
+        html.H2("Applications", style={'color': '#2C3E50', 'textAlign': 'center', 'margin-bottom': '20px'}),
 
-    ], style={'padding': '20px', 'backgroundColor': 'white', 'borderRadius': '10px'})  # Removed boxShadow to match Applications section
+        # 🔹 White Background Applied Here
+        html.Div([
+            # Row for main application charts
+            html.Div([
+                dcc.Graph(figure=fig, style={'width': '50%'}),  # Applications per Day
+                dcc.Graph(figure=fig_cumulative, style={'width': '50%'}),  # Cumulative Applications
+            ], style={'display': 'flex', 'gap': '20px'}),
 
-], style={'padding': '20px', 'backgroundColor': '#F4F7FF', 'borderRadius': '10px', 'margin-bottom': '20px'}),
+            # Row for Applications by Grade (Donut Chart) + Top 10 Programs
+            html.Div([
+                # Donut Chart on the Left
+                html.Div([
+                    dcc.Graph(figure=fig_bar)
+                ], style={'width': '50%'}),  # Donut Chart Container
+
+                # Top 10 Programs on the Right
+                html.Div([
+                    html.H3("🏆 Top 10 Most Applied Schools", style={'color': '#22114F', 'textAlign': 'center', 'margin-top': '20px'}),
+                    dash_table.DataTable(
+                        columns=[
+                            {"name": "Rank", "id": "Rank"},
+                            {"name": "School", "id": "school_name"},
+                            {"name": "Total Applications", "id": "count"}
+                        ],
+                        data=(
+                            # Get 2025 data
+                            applications_current_year_df
+                            .assign(program_id=lambda x: x['program_id'].astype(str))  # Convert to string
+                            .merge(programs_df[['id', 'school_id']].assign(id=lambda x: x['id'].astype(str)), 
+                                  left_on='program_id', right_on='id', how='left')
+                            .merge(schools_df[['id', 'school_name']].assign(id=lambda x: x['id'].astype(str)), 
+                                  left_on='school_id', right_on='id', how='left')
+                            .groupby('school_name')
+                            .size()
+                            .reset_index(name='count')
+                            .sort_values('count', ascending=False)
+                            .head(10)
+                            .assign(Rank=lambda x: range(1, len(x) + 1))
+                            .to_dict('records')
+                        ),
+                        style_table={'overflowX': 'auto', 'margin': 'auto', 'width': '100%', 'backgroundColor': 'white', 
+                                    'borderRadius': '10px', 'padding': '10px'},
+                        style_header={'backgroundColor': '#713BF4', 'color': 'white', 
+                                      'fontWeight': 'bold', 'textAlign': 'center'},
+                        style_data={'backgroundColor': '#ECF0F1', 'color': '#2C3E50', 'textAlign': 'center'}
+                    )
+                ], style={'width': '50%', 'display': 'flex', 'flexDirection': 'column', 'alignItems': 'center'})  # Centered layout
+            ], style={'display': 'flex', 'gap': '20px'}),
+
+        ], style={'padding': '20px', 'backgroundColor': 'white', 'borderRadius': '10px'}),  # 🔹 Applied White Background to Whole Section
+
+    ], style={'padding': '20px', 'backgroundColor': '#F4F7FF', 'borderRadius': '10px', 'margin-bottom': '20px'}),
+
+    # Risk Section
+    html.Div([
+        html.H2("Risk", style={'color': '#2C3E50', 'textAlign': 'center', 'margin-bottom': '20px'}),
+
+        # White Box that contains everything
+        html.Div([
+            # Top row: Map and Risk boxes
+            html.Div([
+                # Left: Map and Distribution
+                html.Div([
+                    # Map
+                    dcc.Graph(id="dynamic-heatmap", style={'height': '500px', 'width': '100%', 'padding': '10px'}),
+                    dcc.Dropdown(
+                        id="heatmap-selector",
+                        options=[
+                            {"label": "Risk", "value": "Risk"},
+                            {"label": "Applicants", "value": "Applicants"},
+                            {"label": "Schools", "value": "Schools"}
+                        ],
+                        value="Risk",
+                        clearable=False,
+                        style={'width': '80%', 'margin': 'auto', 'marginTop': '20px', 'marginBottom': '20px'}
+                    )
+                ], style={'width': '50%', 'display': 'flex', 'flexDirection': 'column', 'alignItems': 'center'}),
+
+                # Right: Risk box
+                html.Div([
+                    # Combined Risk Box
+                    html.Div([
+                        html.H3("Risk Levels", style={'color': '#2C3E50', 'textAlign': 'center', 'margin-bottom': '20px'}),
+                        html.Div([
+                            # High Risk Section
+                            html.Div([
+                                html.P(f"{low_prob_percentage:.1f}%", 
+                                      style={'fontSize': '32px', 'textAlign': 'center', 'fontWeight': 'bold', 'color': '#D7005A', 'margin': '0'}),
+                                html.P("High Risk", 
+                                      style={'fontSize': '16px', 'textAlign': 'center', 'color': '#D7005A', 'margin': '2px 0 0 0', 'fontWeight': 'bold'}),
+                                html.P("Less than 30% chance of assignment", 
+                                      style={'fontSize': '14px', 'textAlign': 'center', 'color': '#2C3E50', 'margin': '2px 0 0 0'})
+                            ], style={
+                                'backgroundColor': '#FFF0F5', 
+                                'borderRadius': '10px 10px 0 0', 
+                                'padding': '8px', 
+                                'border': '2px solid #D7005A',
+                                'borderBottom': 'none',
+                                'height': '150px',
+                                'display': 'flex',
+                                'flexDirection': 'column',
+                                'justifyContent': 'center'
+                            }),
+                            
+                            # Low Risk Section
+                            html.Div([
+                                html.P(f"{high_prob_percentage:.1f}%", 
+                                      style={'fontSize': '32px', 'textAlign': 'center', 'fontWeight': 'bold', 'color': '#28B911', 'margin': '0'}),
+                                html.P("Low Risk", 
+                                      style={'fontSize': '16px', 'textAlign': 'center', 'color': '#28B911', 'margin': '2px 0 0 0', 'fontWeight': 'bold'}),
+                                html.P("More than 80% chance of assignment", 
+                                      style={'fontSize': '14px', 'textAlign': 'center', 'color': '#2C3E50', 'margin': '2px 0 0 0'})
+                            ], style={
+                                'backgroundColor': '#E8F5E9', 
+                                'borderRadius': '0 0 10px 10px', 
+                                'padding': '8px', 
+                                'border': '2px solid #28B911',
+                                'borderTop': 'none',
+                                'height': '150px',
+                                'display': 'flex',
+                                'flexDirection': 'column',
+                                'justifyContent': 'center'
+                            })
+                        ], style={
+                            'boxShadow': '0 4px 8px rgba(0, 0, 0, 0.1)',
+                            'borderRadius': '10px',
+                            'overflow': 'hidden',
+                            'width': '80%',
+                            'margin': 'auto'
+                        })
+                    ], style={'width': '100%', 'padding': '10px', 'display': 'flex', 'flexDirection': 'column', 'alignItems': 'center'})
+                ], style={'width': '50%', 'display': 'flex', 'flexDirection': 'column', 'alignItems': 'center', 'justifyContent': 'flex-start', 'paddingTop': '20px'})
+            ], style={'display': 'flex', 'gap': '20px', 'marginBottom': '20px'}),
+            
+            # Bottom row: Distribution graph and Simulation button
+            html.Div([
+                # Left: Distribution graph
+                html.Div([
+                    dcc.Graph(
+                        id='probability-distribution-graph',
+                        figure=fig1,
+                        style={'height': '500px'}
+                    )
+                ], style={'width': '50%'}),
+                
+                # Right: Simulation button
+                html.Div([
+                    html.A(
+                        html.Button(
+                            "Simulate Assignment Probability",
+                            style={
+                                'backgroundColor': '#713BF4',  # Tether purple color
+                                'color': 'white',
+                                'border': 'none',
+                                'borderRadius': '8px',
+                                'padding': '15px 30px',
+                                'fontSize': '18px',
+                                'fontWeight': 'bold',
+                                'cursor': 'pointer',
+                                'boxShadow': '0 6px 12px rgba(113, 59, 244, 0.3), 0 2px 4px rgba(0, 0, 0, 0.2)',
+                                'transition': 'all 0.3s ease',
+                                'textAlign': 'center',
+                                'display': 'block',
+                                'margin': 'auto',
+                                'width': '80%',
+                                'maxWidth': '300px',
+                                'transform': 'translateY(0)',
+                                'position': 'relative',
+                                'overflow': 'hidden',
+                                'backgroundImage': 'linear-gradient(135deg, #713BF4 0%, #5627FF 100%)',
+                                'border': '1px solid rgba(255, 255, 255, 0.2)',
+                                'textShadow': '0 1px 2px rgba(0, 0, 0, 0.2)',
+                                'letterSpacing': '0.5px',
+                                ':hover': {
+                                    'transform': 'translateY(-3px)',
+                                    'boxShadow': '0 8px 16px rgba(113, 59, 244, 0.4), 0 4px 8px rgba(0, 0, 0, 0.2)',
+                                    'backgroundImage': 'linear-gradient(135deg, #7A4BF4 0%, #5D2FFF 100%)'
+                                },
+                                ':active': {
+                                    'transform': 'translateY(1px)',
+                                    'boxShadow': '0 2px 4px rgba(113, 59, 244, 0.2)'
+                                }
+                            },
+                            id='simulate-button'
+                        ),
+                        href='https://explore.newhavenmagnetschools.com/simulate',
+                        target='_blank',
+                        style={'textDecoration': 'none', 'display': 'flex', 'justifyContent': 'center', 'alignItems': 'center'}
+                    ),
+                    html.P(
+                        "Use our simulation tool to explore different school choice scenarios and see how they affect your assignment probability.",
+                        style={
+                            'color': '#2C3E50',
+                            'fontSize': '16px',
+                            'textAlign': 'center',
+                            'marginTop': '20px',
+                            'padding': '0 20px',
+                            'maxWidth': '300px',
+                            'margin': '20px auto 0'
+                        }
+                    )
+                ], style={
+                    'width': '50%',
+                    'display': 'flex',
+                    'flexDirection': 'column',
+                    'justifyContent': 'center',
+                    'alignItems': 'center',
+                    'padding': '20px'
+                })
+            ], style={'display': 'flex', 'gap': '20px', 'marginTop': '20px'})
+        ], style={'padding': '20px', 'backgroundColor': 'white', 'borderRadius': '10px'})
+
+    ], style={'padding': '20px', 'backgroundColor': '#F4F7FF', 'borderRadius': '10px', 'margin-bottom': '20px'}),
+
+    # Assignment Section
+    html.Div([
+        html.H2("Assignment", style={'color': '#2C3E50', 'textAlign': 'center', 'margin-bottom': '20px'}),
+
+        # White Box that contains everything
+        html.Div([
+            # Assignment Results Table
+            html.H3("Rank Assigned", style={'color': '#22114F', 'textAlign': 'center', 'margin-top': '20px'}),
+            dash_table.DataTable(
+                columns=[
+                    {"name": "Rank Assigned", "id": "Assignment"},
+                    {"name": "Percentage of applicants", "id": "Fraction"}
+                ],
+                data=assignment_df.to_dict("records"),
+                style_table={'overflowX': 'auto', 'margin': 'auto', 'width': '90%', 'backgroundColor': 'white', 
+                            'borderRadius': '10px', 'padding': '10px'},
+                style_header={'backgroundColor': '#713BF4', 'color': 'white', 
+                              'fontWeight': 'bold', 'textAlign': 'center'},
+                style_data={'backgroundColor': '#ECF0F1', 'color': '#2C3E50', 'textAlign': 'center'},
+                style_cell={
+                    'padding': '10px',
+                    'textAlign': 'center',
+                    'fontFamily': 'Inter, sans-serif'
+                },
+                style_data_conditional=[
+                    {
+                        'if': {'row_index': 'odd'},
+                        'backgroundColor': '#F8F9FA'
+                    },
+                    {
+                        'if': {'filter_query': '{Assignment} = "Unassigned"'},
+                        'backgroundColor': '#FFE5E5',
+                        'color': '#D7005A'
+                    },
+                    {
+                        'if': {'filter_query': '{Assignment} = "Rank 1.0"'},
+                        'backgroundColor': '#E5FFE5',
+                        'color': '#28B911'
+                    }
+                ]
+            )
+
+        ], style={'padding': '20px', 'backgroundColor': 'white', 'borderRadius': '10px'})
+
+    ], style={'padding': '20px', 'backgroundColor': '#F4F7FF', 'borderRadius': '10px', 'margin-bottom': '20px'}),
     
     html.Footer("TetherEd, 2025", 
                 style={'textAlign': 'center', 'padding': '20px', 'backgroundColor': '#22114F', 'color': 'white'})
-
 ])
 
 ################# Callback to update heatmap dynamically
@@ -1025,13 +1349,19 @@ def update_heatmap(selection):
     if selection == "Applicants":
         df = heatmap_df
         title = "Applicants Demand Heatmap"
-    else:
+        z_column = "Demand"
+    elif selection == "Schools":
         df = school_heatmap_df
         title = "School Demand Heatmap"
+        z_column = "Demand"
+    else:  # Risk
+        df = risk_heatmap_df
+        title = "Assignment Risk Heatmap"
+        z_column = "Risk"
 
     # Create heatmap figure
     fig = px.density_mapbox(
-        df, lat='lat', lon='lon', z='Demand', radius=10,
+        df, lat='lat', lon='lon', z=z_column, radius=10,
         center={'lat': 41.30, 'lon': -72.92}, zoom=12,
         mapbox_style="dark",
         title=title
@@ -1042,7 +1372,7 @@ def update_heatmap(selection):
         font={"family": "Inter, sans-serif"},
         coloraxis_colorbar=dict(
             title=dict(
-                text="Demand",
+                text="Demand" if z_column == "Demand" else "Risk",
                 font={"family": "Inter, sans-serif", "size": 14}  # ✅ Correct format
             ),
             orientation="h",
@@ -1063,4 +1393,4 @@ def update_heatmap(selection):
 from pyngrok import ngrok
 
 if __name__ == "__main__":
-     app.run_server(debug=True, host="0.0.0.0", port=8080)
+     app.run(debug=True, host="0.0.0.0", port=8080)
