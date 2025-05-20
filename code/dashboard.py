@@ -833,8 +833,7 @@ fig1.add_annotation(
     font=dict(
         family="Inter, sans-serif",
         size=16,
-        color="rgba(215, 0, 90, 0.8)",
-        weight="bold"
+        color="rgba(215, 0, 90, 0.8)"
     ),
     bgcolor="rgba(255, 255, 255, 0.7)",
     bordercolor="rgba(215, 0, 90, 0.5)",
