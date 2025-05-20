@@ -4,27 +4,28 @@ load_dotenv()
 import psycopg2
 
 #Funcion para conectarse a la base de datos core
-def conect_bd(database, environment):
-    if environment == 'staging':
-        host = "staging.cluster-cuasuehzhaay.us-east-1.rds.amazonaws.com"
-    elif environment == 'production':
-        host = "production.cluster-cuasuehzhaay.us-east-1.rds.amazonaws.com"  
+def conect_bd(database):
+    db_host = os.getenv("db_host")
     conn = psycopg2.connect(
         database = database,
         user = os.getenv("db_user"),
         password = os.getenv("db_password"),
         port = os.getenv("db_port"),
-        host = host
+        host = db_host
     )
     return conn
 
 #Funcion para conectarse a la base de datos de users de prod
 def conect_bd_users_prod(database):
+    db_host = os.getenv("db_users_host")
+    port = os.getenv("db_port")
+    db_user = os.getenv("db_users_user")
+    db_pw = os.getenv("db_users_password")
     conn = psycopg2.connect(
         database = database,
-        user = os.getenv("users_user"),
-        password = os.getenv("users_password"),
-        port = "5432",
-        host = "users.cluster-cuasuehzhaay.us-east-1.rds.amazonaws.com"
+        user = db_user,
+        password = db_pw,
+        port = port,
+        host = db_host
     )
     return conn

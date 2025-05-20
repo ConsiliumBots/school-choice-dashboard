@@ -55,11 +55,10 @@ if data_source == "backend":
     ################# Fetch backend data 
 
     # Define environment and database schema
-    environment = 'staging'  # Change to 'production' if needed
     tenant = 'newhaven'
     
     # Establish connection
-    conn = conect_bd('core', environment) 
+    conn = conect_bd('core') 
 
     # Fetch applications per day for the current and previous year
     query = f"""
