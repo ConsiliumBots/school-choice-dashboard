@@ -257,11 +257,11 @@ if data_source == "backend":
                 "5th Grade", "6th Grade", "7th Grade", "8th Grade", "9th Grade", "10th Grade", "11th Grade", "12th Grade"]    
 
 elif data_source == "schoolmint":
-    base_path = "C:/Users/ignaciolepe/Documents/GitHub/school-choice-dashboard/data/inputs"
+    base_path_relative_path = "./data/inputs"
 
     def load_csvs(year):
         """Load all CSVs for a given year into a dictionary of DataFrames."""
-        folder_path = os.path.join(base_path, str(year))
+        folder_path = os.path.join(base_path_relative_path, str(year))
         csv_files = glob.glob(os.path.join(folder_path, "*.csv"))
         dataframes = {}
 
