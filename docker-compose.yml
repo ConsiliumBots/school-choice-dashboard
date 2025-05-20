@@ -1,0 +1,28 @@
+services:
+  dashboard:
+    build: .
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./data:/app/data
+      - ./code:/app/code
+    environment:
+      - PYTHONUNBUFFERED=1
+      - FLASK_ENV=development
+      - FLASK_DEBUG=1
+    restart: unless-stopped
+    command: python code/dashboard.py
+    develop:
+      watch:
+        - path: ./code
+          action: sync
+          target: /app/code
+          ignore:
+            - .git/
+            - __pycache__/
+            - "*.pyc"
+        - path: ./data
+          action: sync
+          target: /app/data
+          ignore:
+            - .git/ 
